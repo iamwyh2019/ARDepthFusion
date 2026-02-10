@@ -34,8 +34,8 @@ enum DepthFusion {
             return nil
         }
 
-        let lidarPtr = lidarBase.assumingMemoryBound(to: Float32.self)
-        let confPtr = confBase.assumingMemoryBound(to: UInt8.self)
+        let lidarBytesPerRow = CVPixelBufferGetBytesPerRow(lidarDepthMap)
+        let confBytesPerRow = CVPixelBufferGetBytesPerRow(lidarConfMap)
 
         // Sample Depth Anything at LiDAR pixel locations
         // DO NOT upsample LiDAR — iterate LiDAR pixels and sample DA via bilinear interp
@@ -43,12 +43,15 @@ enum DepthFusion {
         var daValues: [Float] = []
 
         for ly in 0..<lidarH {
+            let lidarRowPtr = lidarBase.advanced(by: ly * lidarBytesPerRow)
+                .assumingMemoryBound(to: Float32.self)
+            let confRowPtr = confBase.advanced(by: ly * confBytesPerRow)
+                .assumingMemoryBound(to: UInt8.self)
             for lx in 0..<lidarW {
-                let idx = ly * lidarW + lx
-                let confidence = confPtr[idx]
+                let confidence = confRowPtr[lx]
                 guard confidence >= 2 else { continue }
 
-                let lidarDepth = lidarPtr[idx]
+                let lidarDepth = lidarRowPtr[lx]
                 guard lidarDepth >= 0.1, lidarDepth <= 4.0 else { continue }
 
                 // Map LiDAR pixel to Depth Anything coords
@@ -94,11 +97,19 @@ enum DepthFusion {
         let alpha = (n * sumDALidar - sumDA * sumLidar) / denom
         let beta = (sumLidar - alpha * sumDA) / n
 
+        guard alpha > 0 else {
+            print("DepthFusion: Negative alpha (\(alpha)) — depth inversion, skipping")
+            return nil
+        }
+
         // Apply to full depth map
         var fusedDepth = [Float](repeating: 0, count: daW * daH)
         for i in 0..<(daW * daH) {
             fusedDepth[i] = alpha * daArray[i] + beta
         }
+
+        let imageW = CVPixelBufferGetWidth(arFrame.capturedImage)
+        let imageH = CVPixelBufferGetHeight(arFrame.capturedImage)
 
         return DepthFusionResult(
             depthMap: fusedDepth,
@@ -106,7 +117,9 @@ enum DepthFusion {
             height: daH,
             alpha: alpha,
             beta: beta,
-            validPairCount: lidarValues.count
+            validPairCount: lidarValues.count,
+            imageWidth: imageW,
+            imageHeight: imageH
         )
     }
 

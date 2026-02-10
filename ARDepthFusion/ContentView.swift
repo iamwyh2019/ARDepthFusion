@@ -1,5 +1,7 @@
 import SwiftUI
 import RealityKit
+import ARKit
+import CoreVideo
 
 struct ContentView: View {
     @State private var coordinator = ARSessionCoordinator()
@@ -8,6 +10,8 @@ struct ContentView: View {
     @State private var depthResult: DepthFusionResult?
     @State private var isDetecting = false
     @State private var statusText = "Ready"
+    @State private var imageWidth: CGFloat = 1920
+    @State private var imageHeight: CGFloat = 1440
     @State private var selectedDetection: DetectedObject?
     @State private var showEffectPicker = false
     @State private var effectManager = EffectManager()
@@ -21,6 +25,8 @@ struct ContentView: View {
 
             DetectionOverlayView(
                 detections: detections,
+                imageWidth: imageWidth,
+                imageHeight: imageHeight,
                 onTap: { detection in
                     selectedDetection = detection
                     showEffectPicker = true
@@ -36,7 +42,7 @@ struct ContentView: View {
                         .padding(.vertical, 4)
                         .background(.ultraThinMaterial, in: Capsule())
                     Spacer()
-                    if effectManager.placedEffects.count > 0 {
+                    if !effectManager.placedEffects.isEmpty {
                         Text("\(effectManager.placedEffects.count) effects")
                             .font(.caption)
                             .padding(.horizontal, 8)
@@ -90,6 +96,8 @@ struct ContentView: View {
         isDetecting = true
         statusText = "Detecting..."
         detections = []
+        imageWidth = CGFloat(CVPixelBufferGetWidth(frame.capturedImage))
+        imageHeight = CGFloat(CVPixelBufferGetHeight(frame.capturedImage))
 
         Task {
             let start = CFAbsoluteTimeGetCurrent()

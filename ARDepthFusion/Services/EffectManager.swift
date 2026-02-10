@@ -1,4 +1,5 @@
 import RealityKit
+import UIKit
 import Observation
 
 @Observable
@@ -15,7 +16,7 @@ final class EffectManager {
         let anchor = AnchorEntity(world: position)
         let entity = ModelEntity()
 
-        var emitter = configureEmitter(for: type, scale: scale)
+        let emitter = configureEmitter(for: type, scale: scale)
         entity.components.set(emitter)
         anchor.addChild(entity)
         arView.scene.addAnchor(anchor)
@@ -51,7 +52,7 @@ final class EffectManager {
         case .fire:
             emitter.emitterShape = .cone
             emitter.emitterShapeSize = SIMD3<Float>(s * 0.3, s * 0.5, s * 0.3)
-            emitter.birthRate = 200
+            emitter.mainEmitter.birthRate = 200
             emitter.mainEmitter.lifeSpan = 0.8
             emitter.speed = 0.3
             emitter.mainEmitter.size = 0.03 * s
@@ -59,13 +60,12 @@ final class EffectManager {
                 start: .single(.init(red: 1.0, green: 0.9, blue: 0.2, alpha: 1.0)),
                 end: .single(.init(red: 1.0, green: 0.2, blue: 0.0, alpha: 0.0))
             )
-            emitter.mainEmitter.birthDirection = .world
             emitter.birthDirection = .normal
 
         case .smoke:
             emitter.emitterShape = .sphere
             emitter.emitterShapeSize = SIMD3<Float>(s * 0.4, s * 0.4, s * 0.4)
-            emitter.birthRate = 80
+            emitter.mainEmitter.birthRate = 80
             emitter.mainEmitter.lifeSpan = 2.0
             emitter.speed = 0.1
             emitter.mainEmitter.size = 0.05 * s
@@ -76,7 +76,7 @@ final class EffectManager {
 
         case .sparks:
             emitter.emitterShape = .point
-            emitter.birthRate = 150
+            emitter.mainEmitter.birthRate = 150
             emitter.mainEmitter.lifeSpan = 0.5
             emitter.speed = 2.0
             emitter.mainEmitter.size = 0.01 * s
@@ -88,33 +88,33 @@ final class EffectManager {
         case .rain:
             emitter.emitterShape = .plane
             emitter.emitterShapeSize = SIMD3<Float>(s * 1.0, 0, s * 1.0)
-            emitter.birthRate = 300
+            emitter.mainEmitter.birthRate = 300
             emitter.mainEmitter.lifeSpan = 1.5
             emitter.speed = 3.0
             emitter.mainEmitter.size = 0.005 * s
             emitter.mainEmitter.color = .constant(.single(.init(
                 red: 0.7, green: 0.85, blue: 1.0, alpha: 0.6
             )))
-            emitter.birthDirection = .constant
+            emitter.birthDirection = .world
             emitter.emissionDirection = SIMD3<Float>(0, -1, 0)
 
         case .snow:
             emitter.emitterShape = .plane
             emitter.emitterShapeSize = SIMD3<Float>(s * 1.0, 0, s * 1.0)
-            emitter.birthRate = 100
+            emitter.mainEmitter.birthRate = 100
             emitter.mainEmitter.lifeSpan = 3.0
             emitter.speed = 0.3
             emitter.mainEmitter.size = 0.015 * s
             emitter.mainEmitter.color = .constant(.single(.init(
                 red: 1.0, green: 1.0, blue: 1.0, alpha: 0.9
             )))
-            emitter.birthDirection = .constant
+            emitter.birthDirection = .world
             emitter.emissionDirection = SIMD3<Float>(0, -1, 0)
 
         case .magic:
             emitter.emitterShape = .sphere
             emitter.emitterShapeSize = SIMD3<Float>(s * 0.5, s * 0.5, s * 0.5)
-            emitter.birthRate = 50
+            emitter.mainEmitter.birthRate = 50
             emitter.mainEmitter.lifeSpan = 1.5
             emitter.speed = 0.5
             emitter.mainEmitter.size = 0.02 * s
@@ -126,7 +126,7 @@ final class EffectManager {
         case .impact:
             emitter.emitterShape = .sphere
             emitter.emitterShapeSize = SIMD3<Float>(s * 0.1, s * 0.1, s * 0.1)
-            emitter.birthRate = 500
+            emitter.mainEmitter.birthRate = 500
             emitter.mainEmitter.lifeSpan = 0.4
             emitter.speed = 3.0
             emitter.mainEmitter.size = 0.015 * s

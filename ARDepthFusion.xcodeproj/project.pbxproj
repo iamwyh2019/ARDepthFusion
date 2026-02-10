@@ -12,23 +12,7 @@
 		5858AE892F3BBC61007C1787 /* CoreML.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5858AE882F3BBC61007C1787 /* CoreML.framework */; };
 		5858AE8B2F3BBC6B007C1787 /* Vision.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5858AE8A2F3BBC6B007C1787 /* Vision.framework */; };
 		5858AE8D2F3BBC6F007C1787 /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5858AE8C2F3BBC6F007C1787 /* Accelerate.framework */; };
-		5858AE8F2F3BBC97007C1787 /* YOLOUnity.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5858AE8E2F3BBC97007C1787 /* YOLOUnity.framework */; };
-		5858AE942F3BBD30007C1787 /* YOLOUnity.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 5858AE8E2F3BBC97007C1787 /* YOLOUnity.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
-
-/* Begin PBXCopyFilesBuildPhase section */
-		5858AE952F3BBD30007C1787 /* Embed Frameworks */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 10;
-			files = (
-				5858AE942F3BBD30007C1787 /* YOLOUnity.framework in Embed Frameworks */,
-			);
-			name = "Embed Frameworks";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		5858AE4D2F3BBB03007C1787 /* ARDepthFusion.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ARDepthFusion.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -37,7 +21,6 @@
 		5858AE882F3BBC61007C1787 /* CoreML.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreML.framework; path = System/Library/Frameworks/CoreML.framework; sourceTree = SDKROOT; };
 		5858AE8A2F3BBC6B007C1787 /* Vision.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Vision.framework; path = System/Library/Frameworks/Vision.framework; sourceTree = SDKROOT; };
 		5858AE8C2F3BBC6F007C1787 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
-		5858AE8E2F3BBC97007C1787 /* YOLOUnity.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = YOLOUnity.framework; path = Frameworks/YOLOUnity.framework; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -71,7 +54,6 @@
 				5858AE8D2F3BBC6F007C1787 /* Accelerate.framework in Frameworks */,
 				5858AE852F3BBC58007C1787 /* ARKit.framework in Frameworks */,
 				5858AE892F3BBC61007C1787 /* CoreML.framework in Frameworks */,
-				5858AE8F2F3BBC97007C1787 /* YOLOUnity.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -103,7 +85,6 @@
 				5858AE882F3BBC61007C1787 /* CoreML.framework */,
 				5858AE862F3BBC5D007C1787 /* RealityKit.framework */,
 				5858AE842F3BBC58007C1787 /* ARKit.framework */,
-				5858AE8E2F3BBC97007C1787 /* YOLOUnity.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -118,7 +99,6 @@
 				5858AE492F3BBB03007C1787 /* Sources */,
 				5858AE4A2F3BBB03007C1787 /* Frameworks */,
 				5858AE4B2F3BBB03007C1787 /* Resources */,
-				5858AE952F3BBD30007C1787 /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -319,10 +299,6 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = J69W6UQUZ7;
 				ENABLE_PREVIEWS = YES;
-				FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/Frameworks",
-				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = ARDepthFusion/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Fancy Visual";
@@ -365,10 +341,6 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = J69W6UQUZ7;
 				ENABLE_PREVIEWS = YES;
-				FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/Frameworks",
-				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = ARDepthFusion/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Fancy Visual";

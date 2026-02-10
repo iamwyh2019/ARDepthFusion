@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import YOLOUnity
 
 @main
 struct ARDepthFusionApp: App {

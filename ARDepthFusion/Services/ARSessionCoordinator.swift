@@ -9,7 +9,7 @@ final class ARSessionCoordinator: NSObject, ARSessionDelegate, @unchecked Sendab
 
     nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
         let lidarAvailable = frame.sceneDepth != nil
-        MainActor.assumeIsolated {
+        DispatchQueue.main.async {
             self.latestFrame = frame
             if lidarAvailable && !self.hasLiDAR {
                 self.hasLiDAR = true

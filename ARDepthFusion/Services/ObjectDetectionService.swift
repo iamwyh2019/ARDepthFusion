@@ -1,61 +1,18 @@
 import ARKit
-import YOLOUnity
 
-private func yoloCallbackHandler(
-    _ classCount: Int32,
-    _ classIndices: UnsafePointer<Int32>,
-    _ classNamesRaw: UnsafePointer<UInt8>,
-    _ namesByteLen: Int32,
-    _ confidences: UnsafePointer<Float>,
-    _ boxes: UnsafePointer<Int32>,
-    _ centroids: UnsafePointer<Int32>,
-    _ detectionCount: Int32,
-    _ maskSizes: UnsafePointer<Int32>,
-    _ maskCount: Int32,
-    _ maskData: UnsafePointer<Int32>,
-    _ timestamp: UInt64
-) {
-    let count = Int(detectionCount)
-    guard count > 0 else {
-        ObjectDetectionService.shared.deliverResults([])
-        return
-    }
-
-    // Parse class names from null-separated UTF-8
-    var classNames: [String] = []
-    let namesLen = Int(namesByteLen)
-    var start = 0
-    for i in 0..<namesLen {
-        if classNamesRaw[i] == 0 {
-            let nameData = Data(bytes: classNamesRaw.advanced(by: start), count: i - start)
-            classNames.append(String(data: nameData, encoding: .utf8) ?? "unknown")
-            start = i + 1
-        }
-    }
-
-    var objects: [DetectedObject] = []
-    for i in 0..<count {
-        let classIdx = Int(classIndices[i])
-        let name = classIdx < classNames.count ? classNames[classIdx] : "class_\(classIdx)"
-        let conf = confidences[i]
-
-        // Boxes are XYXY format (x1, y1, x2, y2) as Int32
-        let x1 = CGFloat(boxes[i * 4 + 0])
-        let y1 = CGFloat(boxes[i * 4 + 1])
-        let x2 = CGFloat(boxes[i * 4 + 2])
-        let y2 = CGFloat(boxes[i * 4 + 3])
-        let bbox = CGRect(x: x1, y: y1, width: x2 - x1, height: y2 - y1)
-
-        // Centroids are (cx, cy) pairs as Int32
-        let cx = CGFloat(centroids[i * 2 + 0])
-        let cy = CGFloat(centroids[i * 2 + 1])
-
-        objects.append(DetectedObject(
-            className: name,
-            confidence: conf,
-            boundingBox: bbox,
-            centroid: CGPoint(x: cx, y: cy)
-        ))
+nonisolated private func yoloResultHandler(_ result: YOLODetectionResult) {
+    let objects = result.detections.map { det in
+        DetectedObject(
+            className: det.className,
+            confidence: det.confidence,
+            boundingBox: CGRect(
+                x: CGFloat(det.boxX1),
+                y: CGFloat(det.boxY1),
+                width: CGFloat(det.boxX2 - det.boxX1),
+                height: CGFloat(det.boxY2 - det.boxY1)
+            ),
+            centroid: CGPoint(x: CGFloat(det.centroidX), y: CGFloat(det.centroidY))
+        )
     }
 
     ObjectDetectionService.shared.deliverResults(objects)
@@ -63,12 +20,12 @@ private func yoloCallbackHandler(
 
 @Observable
 final class ObjectDetectionService: @unchecked Sendable {
-    nonisolated(unsafe) static let shared = ObjectDetectionService()
+    nonisolated static let shared = ObjectDetectionService()
 
     private var isInitialized = false
     private let lock = NSLock()
-    private var pendingContinuation: CheckedContinuation<[DetectedObject], Never>?
-    private var retainedImageData: Data?
+    @ObservationIgnored private nonisolated(unsafe) var pendingContinuation: CheckedContinuation<[DetectedObject], Never>?
+    @ObservationIgnored private nonisolated(unsafe) var retainedImageData: Data?
 
     private init() {}
 
@@ -81,7 +38,7 @@ final class ObjectDetectionService: @unchecked Sendable {
             scaleMethod: "scaleFit"
         )
         if success {
-            RegisterYOLOCallback(callback: yoloCallbackHandler)
+            RegisterYOLOCallback(callback: yoloResultHandler)
             isInitialized = true
             print("YOLO initialized successfully")
         } else {
@@ -96,24 +53,21 @@ final class ObjectDetectionService: @unchecked Sendable {
             return []
         }
 
+        let nsData = bgra.data as NSData
+        let baseAddress = nsData.bytes.assumingMemoryBound(to: UInt8.self)
+
         return await withCheckedContinuation { continuation in
             lock.lock()
             pendingContinuation = continuation
             retainedImageData = bgra.data
             lock.unlock()
 
-            bgra.data.withUnsafeBytes { ptr in
-                guard let baseAddress = ptr.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
-                    self.deliverResults([])
-                    return
-                }
-                RunYOLO_Byte(
-                    imageData: baseAddress,
-                    width: bgra.width,
-                    height: bgra.height,
-                    timestamp: UInt64(Date().timeIntervalSince1970 * 1000)
-                )
-            }
+            RunYOLO_Byte(
+                imageData: baseAddress,
+                width: bgra.width,
+                height: bgra.height,
+                timestamp: UInt64(Date().timeIntervalSince1970 * 1000)
+            )
         }
     }
 

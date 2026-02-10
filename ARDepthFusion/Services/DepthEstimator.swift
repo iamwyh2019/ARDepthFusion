@@ -10,7 +10,7 @@ struct DepthMapData: Sendable {
 }
 
 final class DepthEstimator: @unchecked Sendable {
-    nonisolated(unsafe) static let shared = DepthEstimator()
+    static let shared = DepthEstimator()
 
     private var model: MLModel?
 
@@ -93,7 +93,7 @@ final class DepthEstimator: @unchecked Sendable {
         var values = [Float](repeating: 0, count: w * h)
 
         switch pixelFormat {
-        case kCVPixelFormatType_DepthFloat32, kCVPixelFormatType_32AlphaGray:
+        case kCVPixelFormatType_DepthFloat32:
             // Float32 grayscale
             for y in 0..<h {
                 let rowPtr = baseAddress.advanced(by: y * bytesPerRow)

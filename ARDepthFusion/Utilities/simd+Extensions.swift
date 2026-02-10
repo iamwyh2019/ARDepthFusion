@@ -1,4 +1,5 @@
 import simd
+import CoreGraphics
 
 func calculateEffectScale(
     boundingBox: CGRect,

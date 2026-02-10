@@ -2,6 +2,8 @@ import SwiftUI
 
 struct DetectionOverlayView: View {
     let detections: [DetectedObject]
+    let imageWidth: CGFloat
+    let imageHeight: CGFloat
     let onTap: (DetectedObject) -> Void
 
     var body: some View {
@@ -39,9 +41,6 @@ struct DetectionOverlayView: View {
     // screenX = imageY / imageHeight * viewWidth
     // screenY = (1 - imageX / imageWidth) * viewHeight
     private func imageToScreen(_ rect: CGRect, viewSize: CGSize) -> CGRect {
-        let imageWidth: CGFloat = 1920
-        let imageHeight: CGFloat = 1440
-
         let x1 = rect.minY / imageHeight * viewSize.width
         let y1 = (1 - rect.maxX / imageWidth) * viewSize.height
         let x2 = rect.maxY / imageHeight * viewSize.width

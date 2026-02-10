@@ -8,14 +8,15 @@ struct DepthFusionResult {
     let alpha: Float
     let beta: Float
     let validPairCount: Int
+    let imageWidth: Int
+    let imageHeight: Int
 
     func sampleDepth(at imagePoint: CGPoint) -> Float? {
         guard width > 0, height > 0 else { return nil }
 
         // Map image pixel coords to depth map coords
-        // The depth map may be smaller than the original image (1920x1440)
-        let scaleX = Float(width) / 1920.0
-        let scaleY = Float(height) / 1440.0
+        let scaleX = Float(width) / Float(imageWidth)
+        let scaleY = Float(height) / Float(imageHeight)
         let dx = Float(imagePoint.x) * scaleX
         let dy = Float(imagePoint.y) * scaleY
 

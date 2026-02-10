@@ -14,8 +14,8 @@ extension ARView {
         // Image point is in camera image space (landscape-right, 1920x1440)
         let fx = intrinsics[0][0]
         let fy = intrinsics[1][1]
-        let cx = intrinsics[2][0]
-        let cy = intrinsics[2][1]
+        let cx = intrinsics[0][2]
+        let cy = intrinsics[1][2]
 
         // Unproject: pixel -> camera space ray
         let x = (Float(imagePoint.x) - cx) / fx * depth
