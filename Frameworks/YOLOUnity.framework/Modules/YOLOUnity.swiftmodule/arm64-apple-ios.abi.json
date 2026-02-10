@@ -1,0 +1,783 @@
+{
+  "ABIRoot": {
+    "kind": "Root",
+    "name": "YOLOUnity",
+    "printedName": "YOLOUnity",
+    "children": [
+      {
+        "kind": "Import",
+        "name": "CoreML",
+        "printedName": "CoreML",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity"
+      },
+      {
+        "kind": "Import",
+        "name": "Foundation",
+        "printedName": "Foundation",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity"
+      },
+      {
+        "kind": "Import",
+        "name": "Vision",
+        "printedName": "Vision",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity"
+      },
+      {
+        "kind": "Import",
+        "name": "UniformTypeIdentifiers",
+        "printedName": "UniformTypeIdentifiers",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity"
+      },
+      {
+        "kind": "Import",
+        "name": "Accelerate",
+        "printedName": "Accelerate",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity"
+      },
+      {
+        "kind": "Import",
+        "name": "UIKit",
+        "printedName": "UIKit",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity"
+      },
+      {
+        "kind": "Import",
+        "name": "Foundation",
+        "printedName": "Foundation",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity"
+      },
+      {
+        "kind": "Import",
+        "name": "Vision",
+        "printedName": "Vision",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity"
+      },
+      {
+        "kind": "Import",
+        "name": "UIKit",
+        "printedName": "UIKit",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity"
+      },
+      {
+        "kind": "Function",
+        "name": "RegisterYOLOCallback",
+        "printedName": "RegisterYOLOCallback(callback:)",
+        "children": [
+          {
+            "kind": "TypeNominal",
+            "name": "Void",
+            "printedName": "()"
+          },
+          {
+            "kind": "TypeFunc",
+            "name": "Function",
+            "printedName": "(Swift.Int32, Swift.UnsafePointer<Swift.Int32>, Swift.UnsafePointer<Swift.UInt8>, Swift.Int32, Swift.UnsafePointer<Swift.Float>, Swift.UnsafePointer<Swift.Int32>, Swift.UnsafePointer<Swift.Int32>, Swift.Int32, Swift.UnsafePointer<Swift.Int32>, Swift.Int32, Swift.UnsafePointer<Swift.Int32>, Swift.UInt64) -> ()",
+            "children": [
+              {
+                "kind": "TypeNominal",
+                "name": "Void",
+                "printedName": "()"
+              },
+              {
+                "kind": "TypeNominal",
+                "name": "Tuple",
+                "printedName": "(Swift.Int32, Swift.UnsafePointer<Swift.Int32>, Swift.UnsafePointer<Swift.UInt8>, Swift.Int32, Swift.UnsafePointer<Swift.Float>, Swift.UnsafePointer<Swift.Int32>, Swift.UnsafePointer<Swift.Int32>, Swift.Int32, Swift.UnsafePointer<Swift.Int32>, Swift.Int32, Swift.UnsafePointer<Swift.Int32>, Swift.UInt64)",
+                "children": [
+                  {
+                    "kind": "TypeNominal",
+                    "name": "Int32",
+                    "printedName": "Swift.Int32",
+                    "usr": "s:s5Int32V"
+                  },
+                  {
+                    "kind": "TypeNominal",
+                    "name": "UnsafePointer",
+                    "printedName": "Swift.UnsafePointer<Swift.Int32>",
+                    "children": [
+                      {
+                        "kind": "TypeNominal",
+                        "name": "Int32",
+                        "printedName": "Swift.Int32",
+                        "usr": "s:s5Int32V"
+                      }
+                    ],
+                    "usr": "s:SP"
+                  },
+                  {
+                    "kind": "TypeNominal",
+                    "name": "UnsafePointer",
+                    "printedName": "Swift.UnsafePointer<Swift.UInt8>",
+                    "children": [
+                      {
+                        "kind": "TypeNominal",
+                        "name": "UInt8",
+                        "printedName": "Swift.UInt8",
+                        "usr": "s:s5UInt8V"
+                      }
+                    ],
+                    "usr": "s:SP"
+                  },
+                  {
+                    "kind": "TypeNominal",
+                    "name": "Int32",
+                    "printedName": "Swift.Int32",
+                    "usr": "s:s5Int32V"
+                  },
+                  {
+                    "kind": "TypeNominal",
+                    "name": "UnsafePointer",
+                    "printedName": "Swift.UnsafePointer<Swift.Float>",
+                    "children": [
+                      {
+                        "kind": "TypeNominal",
+                        "name": "Float",
+                        "printedName": "Swift.Float",
+                        "usr": "s:Sf"
+                      }
+                    ],
+                    "usr": "s:SP"
+                  },
+                  {
+                    "kind": "TypeNominal",
+                    "name": "UnsafePointer",
+                    "printedName": "Swift.UnsafePointer<Swift.Int32>",
+                    "children": [
+                      {
+                        "kind": "TypeNominal",
+                        "name": "Int32",
+                        "printedName": "Swift.Int32",
+                        "usr": "s:s5Int32V"
+                      }
+                    ],
+                    "usr": "s:SP"
+                  },
+                  {
+                    "kind": "TypeNominal",
+                    "name": "UnsafePointer",
+                    "printedName": "Swift.UnsafePointer<Swift.Int32>",
+                    "children": [
+                      {
+                        "kind": "TypeNominal",
+                        "name": "Int32",
+                        "printedName": "Swift.Int32",
+                        "usr": "s:s5Int32V"
+                      }
+                    ],
+                    "usr": "s:SP"
+                  },
+                  {
+                    "kind": "TypeNominal",
+                    "name": "Int32",
+                    "printedName": "Swift.Int32",
+                    "usr": "s:s5Int32V"
+                  },
+                  {
+                    "kind": "TypeNominal",
+                    "name": "UnsafePointer",
+                    "printedName": "Swift.UnsafePointer<Swift.Int32>",
+                    "children": [
+                      {
+                        "kind": "TypeNominal",
+                        "name": "Int32",
+                        "printedName": "Swift.Int32",
+                        "usr": "s:s5Int32V"
+                      }
+                    ],
+                    "usr": "s:SP"
+                  },
+                  {
+                    "kind": "TypeNominal",
+                    "name": "Int32",
+                    "printedName": "Swift.Int32",
+                    "usr": "s:s5Int32V"
+                  },
+                  {
+                    "kind": "TypeNominal",
+                    "name": "UnsafePointer",
+                    "printedName": "Swift.UnsafePointer<Swift.Int32>",
+                    "children": [
+                      {
+                        "kind": "TypeNominal",
+                        "name": "Int32",
+                        "printedName": "Swift.Int32",
+                        "usr": "s:s5Int32V"
+                      }
+                    ],
+                    "usr": "s:SP"
+                  },
+                  {
+                    "kind": "TypeNominal",
+                    "name": "UInt64",
+                    "printedName": "Swift.UInt64",
+                    "usr": "s:s6UInt64V"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "declKind": "Func",
+        "usr": "c:(cm)RegisterYOLOCallbackWithCallback:",
+        "mangledName": "$s9YOLOUnity20RegisterYOLOCallback8callbackyys5Int32V_SPyAEGSPys5UInt8VGAESPySfGA2fefeFs6UInt64VtXC_tF",
+        "moduleName": "YOLOUnity",
+        "declAttributes": [
+          "AccessControl",
+          "CDecl",
+          "RawDocComment"
+        ],
+        "funcSelfKind": "NonMutating"
+      },
+      {
+        "kind": "Function",
+        "name": "InitializeYOLO",
+        "printedName": "InitializeYOLO(modelName:confidenceThreshold:iouThreshold:scaleMethod:)",
+        "children": [
+          {
+            "kind": "TypeNominal",
+            "name": "Bool",
+            "printedName": "Swift.Bool",
+            "usr": "s:Sb"
+          },
+          {
+            "kind": "TypeNominal",
+            "name": "UnsafePointer",
+            "printedName": "Swift.UnsafePointer<Swift.Int8>",
+            "children": [
+              {
+                "kind": "TypeNominal",
+                "name": "Int8",
+                "printedName": "Swift.Int8",
+                "usr": "s:s4Int8V"
+              }
+            ],
+            "usr": "s:SP"
+          },
+          {
+            "kind": "TypeNominal",
+            "name": "Float",
+            "printedName": "Swift.Float",
+            "usr": "s:Sf"
+          },
+          {
+            "kind": "TypeNominal",
+            "name": "Float",
+            "printedName": "Swift.Float",
+            "usr": "s:Sf"
+          },
+          {
+            "kind": "TypeNominal",
+            "name": "UnsafePointer",
+            "printedName": "Swift.UnsafePointer<Swift.Int8>",
+            "children": [
+              {
+                "kind": "TypeNominal",
+                "name": "Int8",
+                "printedName": "Swift.Int8",
+                "usr": "s:s4Int8V"
+              }
+            ],
+            "usr": "s:SP"
+          }
+        ],
+        "declKind": "Func",
+        "usr": "c:(cm)InitializeYOLOWithModelName:confidenceThreshold:iouThreshold:scaleMethod:",
+        "mangledName": "$s9YOLOUnity14InitializeYOLO9modelName19confidenceThreshold03iouG011scaleMethodSbSPys4Int8VG_S2fAItF",
+        "moduleName": "YOLOUnity",
+        "declAttributes": [
+          "AccessControl",
+          "CDecl"
+        ],
+        "funcSelfKind": "NonMutating"
+      },
+      {
+        "kind": "Function",
+        "name": "RunYOLO",
+        "printedName": "RunYOLO(imageData:width:height:timestamp:scaleX:scaleY:)",
+        "children": [
+          {
+            "kind": "TypeNominal",
+            "name": "Void",
+            "printedName": "()"
+          },
+          {
+            "kind": "TypeNominal",
+            "name": "UnsafePointer",
+            "printedName": "Swift.UnsafePointer<Swift.Float>",
+            "children": [
+              {
+                "kind": "TypeNominal",
+                "name": "Float",
+                "printedName": "Swift.Float",
+                "usr": "s:Sf"
+              }
+            ],
+            "usr": "s:SP"
+          },
+          {
+            "kind": "TypeNominal",
+            "name": "Int",
+            "printedName": "Swift.Int",
+            "usr": "s:Si"
+          },
+          {
+            "kind": "TypeNominal",
+            "name": "Int",
+            "printedName": "Swift.Int",
+            "usr": "s:Si"
+          },
+          {
+            "kind": "TypeNominal",
+            "name": "UInt64",
+            "printedName": "Swift.UInt64",
+            "hasDefaultArg": true,
+            "usr": "s:s6UInt64V"
+          },
+          {
+            "kind": "TypeNominal",
+            "name": "Float",
+            "printedName": "Swift.Float",
+            "hasDefaultArg": true,
+            "usr": "s:Sf"
+          },
+          {
+            "kind": "TypeNominal",
+            "name": "Float",
+            "printedName": "Swift.Float",
+            "hasDefaultArg": true,
+            "usr": "s:Sf"
+          }
+        ],
+        "declKind": "Func",
+        "usr": "c:(cm)RunYOLOWithImageData:width:height:timestamp:scaleX:scaleY:",
+        "mangledName": "$s9YOLOUnity7RunYOLO9imageData5width6height9timestamp6scaleX0I1YySPySfG_S2is6UInt64VS2ftF",
+        "moduleName": "YOLOUnity",
+        "declAttributes": [
+          "AccessControl",
+          "CDecl"
+        ],
+        "funcSelfKind": "NonMutating"
+      },
+      {
+        "kind": "Function",
+        "name": "RunYOLO_Byte",
+        "printedName": "RunYOLO_Byte(imageData:width:height:timestamp:scaleX:scaleY:)",
+        "children": [
+          {
+            "kind": "TypeNominal",
+            "name": "Void",
+            "printedName": "()"
+          },
+          {
+            "kind": "TypeNominal",
+            "name": "UnsafePointer",
+            "printedName": "Swift.UnsafePointer<Swift.UInt8>",
+            "children": [
+              {
+                "kind": "TypeNominal",
+                "name": "UInt8",
+                "printedName": "Swift.UInt8",
+                "usr": "s:s5UInt8V"
+              }
+            ],
+            "usr": "s:SP"
+          },
+          {
+            "kind": "TypeNominal",
+            "name": "Int",
+            "printedName": "Swift.Int",
+            "usr": "s:Si"
+          },
+          {
+            "kind": "TypeNominal",
+            "name": "Int",
+            "printedName": "Swift.Int",
+            "usr": "s:Si"
+          },
+          {
+            "kind": "TypeNominal",
+            "name": "UInt64",
+            "printedName": "Swift.UInt64",
+            "hasDefaultArg": true,
+            "usr": "s:s6UInt64V"
+          },
+          {
+            "kind": "TypeNominal",
+            "name": "Float",
+            "printedName": "Swift.Float",
+            "hasDefaultArg": true,
+            "usr": "s:Sf"
+          },
+          {
+            "kind": "TypeNominal",
+            "name": "Float",
+            "printedName": "Swift.Float",
+            "hasDefaultArg": true,
+            "usr": "s:Sf"
+          }
+        ],
+        "declKind": "Func",
+        "usr": "c:(cm)RunYOLO_ByteWithImageData:width:height:timestamp:scaleX:scaleY:",
+        "mangledName": "$s9YOLOUnity12RunYOLO_Byte9imageData5width6height9timestamp6scaleX0J1YySPys5UInt8VG_S2is6UInt64VS2ftF",
+        "moduleName": "YOLOUnity",
+        "declAttributes": [
+          "AccessControl",
+          "CDecl"
+        ],
+        "funcSelfKind": "NonMutating"
+      },
+      {
+        "kind": "Import",
+        "name": "CoreML",
+        "printedName": "CoreML",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity"
+      },
+      {
+        "kind": "Import",
+        "name": "Vision",
+        "printedName": "Vision",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity"
+      },
+      {
+        "kind": "Import",
+        "name": "UIKit",
+        "printedName": "UIKit",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity"
+      },
+      {
+        "kind": "Import",
+        "name": "Accelerate",
+        "printedName": "Accelerate",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity"
+      },
+      {
+        "kind": "Import",
+        "name": "CoreML",
+        "printedName": "CoreML",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity"
+      },
+      {
+        "kind": "Import",
+        "name": "Vision",
+        "printedName": "Vision",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity"
+      },
+      {
+        "kind": "Import",
+        "name": "UIKit",
+        "printedName": "UIKit",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity"
+      },
+      {
+        "kind": "Import",
+        "name": "Accelerate",
+        "printedName": "Accelerate",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity"
+      },
+      {
+        "kind": "Import",
+        "name": "CoreML",
+        "printedName": "CoreML",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity"
+      },
+      {
+        "kind": "Import",
+        "name": "Vision",
+        "printedName": "Vision",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity"
+      },
+      {
+        "kind": "Import",
+        "name": "UIKit",
+        "printedName": "UIKit",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity"
+      },
+      {
+        "kind": "Import",
+        "name": "Accelerate",
+        "printedName": "Accelerate",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity"
+      },
+      {
+        "kind": "Import",
+        "name": "CoreML",
+        "printedName": "CoreML",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity",
+        "declAttributes": [
+          "RawDocComment"
+        ]
+      },
+      {
+        "kind": "Import",
+        "name": "CoreML",
+        "printedName": "CoreML",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity",
+        "declAttributes": [
+          "RawDocComment"
+        ]
+      },
+      {
+        "kind": "Import",
+        "name": "CoreML",
+        "printedName": "CoreML",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity",
+        "declAttributes": [
+          "RawDocComment"
+        ]
+      },
+      {
+        "kind": "Import",
+        "name": "CoreML",
+        "printedName": "CoreML",
+        "declKind": "Import",
+        "moduleName": "YOLOUnity",
+        "declAttributes": [
+          "RawDocComment"
+        ]
+      }
+    ],
+    "json_format_version": 8
+  },
+  "ConstValues": [
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/Helper.swift",
+      "kind": "BooleanLiteral",
+      "offset": 186,
+      "length": 4,
+      "value": "true"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/Helper.swift",
+      "kind": "BooleanLiteral",
+      "offset": 2040,
+      "length": 4,
+      "value": "true"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/Helper.swift",
+      "kind": "IntegerLiteral",
+      "offset": 2084,
+      "length": 1,
+      "value": "4"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/Helper.swift",
+      "kind": "IntegerLiteral",
+      "offset": 2299,
+      "length": 1,
+      "value": "8"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/Helper.swift",
+      "kind": "IntegerLiteral",
+      "offset": 2594,
+      "length": 1,
+      "value": "0"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/Helper.swift",
+      "kind": "IntegerLiteral",
+      "offset": 2600,
+      "length": 1,
+      "value": "0"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/Helper.swift",
+      "kind": "FloatLiteral",
+      "offset": 2838,
+      "length": 5,
+      "value": "255.0"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/Helper.swift",
+      "kind": "BooleanLiteral",
+      "offset": 3035,
+      "length": 4,
+      "value": "true"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/Helper.swift",
+      "kind": "BooleanLiteral",
+      "offset": 4077,
+      "length": 4,
+      "value": "true"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/Helper.swift",
+      "kind": "BooleanLiteral",
+      "offset": 6654,
+      "length": 4,
+      "value": "true"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/YOLOBridge.swift",
+      "kind": "IntegerLiteral",
+      "offset": 1700,
+      "length": 1,
+      "value": "0"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/YOLOBridge.swift",
+      "kind": "FloatLiteral",
+      "offset": 1723,
+      "length": 3,
+      "value": "1.0"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/YOLOBridge.swift",
+      "kind": "FloatLiteral",
+      "offset": 1748,
+      "length": 3,
+      "value": "1.0"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/YOLOBridge.swift",
+      "kind": "IntegerLiteral",
+      "offset": 2402,
+      "length": 1,
+      "value": "0"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/YOLOBridge.swift",
+      "kind": "FloatLiteral",
+      "offset": 2425,
+      "length": 3,
+      "value": "1.0"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/YOLOBridge.swift",
+      "kind": "FloatLiteral",
+      "offset": 2450,
+      "length": 3,
+      "value": "1.0"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/YOLOPredictor.swift",
+      "kind": "FloatLiteral",
+      "offset": 935,
+      "length": 3,
+      "value": "0.5"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/YOLOPredictor.swift",
+      "kind": "FloatLiteral",
+      "offset": 970,
+      "length": 3,
+      "value": "0.5"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/YOLOPredictor.swift",
+      "kind": "StringLiteral",
+      "offset": 1005,
+      "length": 11,
+      "value": "\"scaleFill\""
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/YOLOPredictor.swift",
+      "kind": "FloatLiteral",
+      "offset": 4121,
+      "length": 3,
+      "value": "1.0"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/YOLOPredictor.swift",
+      "kind": "FloatLiteral",
+      "offset": 4142,
+      "length": 3,
+      "value": "1.0"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/YOLOPredictor.swift",
+      "kind": "FloatLiteral",
+      "offset": 4987,
+      "length": 3,
+      "value": "1.0"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/YOLOPredictor.swift",
+      "kind": "FloatLiteral",
+      "offset": 5008,
+      "length": 3,
+      "value": "1.0"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/YOLOPredictor.swift",
+      "kind": "FloatLiteral",
+      "offset": 18259,
+      "length": 4,
+      "value": "0.45"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/YOLOPredictor.swift",
+      "kind": "FloatLiteral",
+      "offset": 18295,
+      "length": 4,
+      "value": "0.25"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/YOLOPredictor.swift",
+      "kind": "Dictionary",
+      "offset": 18833,
+      "length": 3,
+      "value": "[]"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Desktop\/GitHub\/YOLOUnity\/YOLOUnity\/YOLOUtils.swift",
+      "kind": "FloatLiteral",
+      "offset": 8479,
+      "length": 3,
+      "value": "0.5"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Library\/Developer\/Xcode\/DerivedData\/YOLOUnity-fnriwvboatlnabaobrpayvodyvwg\/Build\/Intermediates.noindex\/YOLOUnity.build\/Release-iphoneos\/YOLOUnity.build\/DerivedSources\/CoreMLGenerated\/yolo11l-seg\/yolo11l-seg.swift",
+      "kind": "Array",
+      "offset": 432,
+      "length": 9,
+      "value": "[\"image\"]"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Library\/Developer\/Xcode\/DerivedData\/YOLOUnity-fnriwvboatlnabaobrpayvodyvwg\/Build\/Intermediates.noindex\/YOLOUnity.build\/Release-iphoneos\/YOLOUnity.build\/DerivedSources\/CoreMLGenerated\/yolo11m-seg\/yolo11m-seg.swift",
+      "kind": "Array",
+      "offset": 432,
+      "length": 9,
+      "value": "[\"image\"]"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Library\/Developer\/Xcode\/DerivedData\/YOLOUnity-fnriwvboatlnabaobrpayvodyvwg\/Build\/Intermediates.noindex\/YOLOUnity.build\/Release-iphoneos\/YOLOUnity.build\/DerivedSources\/CoreMLGenerated\/yolo11n-seg\/yolo11n-seg.swift",
+      "kind": "Array",
+      "offset": 432,
+      "length": 9,
+      "value": "[\"image\"]"
+    },
+    {
+      "filePath": "\/Users\/yuheng\/Library\/Developer\/Xcode\/DerivedData\/YOLOUnity-fnriwvboatlnabaobrpayvodyvwg\/Build\/Intermediates.noindex\/YOLOUnity.build\/Release-iphoneos\/YOLOUnity.build\/DerivedSources\/CoreMLGenerated\/yolo11s-seg\/yolo11s-seg.swift",
+      "kind": "Array",
+      "offset": 432,
+      "length": 9,
+      "value": "[\"image\"]"
+    }
+  ]
+}

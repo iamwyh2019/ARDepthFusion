@@ -1,0 +1,5 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Large binary files - use Git LFS if available
+*.bin filter=lfs diff=lfs merge=lfs -text

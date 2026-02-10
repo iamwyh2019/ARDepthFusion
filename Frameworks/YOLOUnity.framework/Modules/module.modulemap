@@ -1,0 +1,6 @@
+framework module YOLOUnity {
+  umbrella header "YOLOUnity.h"
+  export *
+
+  module * { export * }
+}
