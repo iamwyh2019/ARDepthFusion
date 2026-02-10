@@ -14,6 +14,9 @@ struct YOLODetection: Sendable {
     let boxY2: Int
     let centroidX: Int
     let centroidY: Int
+    let mask: [Float]
+    let maskWidth: Int
+    let maskHeight: Int
 }
 
 struct YOLODetectionResult: Sendable {

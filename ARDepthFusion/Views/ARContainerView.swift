@@ -15,7 +15,9 @@ struct ARContainerView: UIViewRepresentable {
         }
         config.planeDetection = [.horizontal, .vertical]
 
-        arView.environment.sceneUnderstanding.options.insert(.occlusion)
+        // Note: .occlusion is intentionally NOT enabled — it creates a stencil buffer
+        // that conflicts with ParticleEmitterComponent's transparent render pass,
+        // causing Metal validation assertions. Depth is still available via sceneDepth.
         arView.session.delegate = coordinator
         arView.session.run(config)
 

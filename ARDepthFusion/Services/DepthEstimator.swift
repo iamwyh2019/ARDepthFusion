@@ -17,6 +17,12 @@ final class DepthEstimator: @unchecked Sendable {
     private let lock = NSLock()
     nonisolated(unsafe) private var pendingContinuation: CheckedContinuation<DepthMapData?, Never>?
 
+    nonisolated static func preload() async {
+        await Task.detached(priority: .userInitiated) {
+            _ = shared
+        }.value
+    }
+
     private init?() {
         let config = MLModelConfiguration()
         config.computeUnits = .cpuAndNeuralEngine
@@ -74,20 +80,27 @@ final class DepthEstimator: @unchecked Sendable {
             return nil
         }
 
-        guard let results = request.results as? [VNCoreMLFeatureValueObservation],
-              let first = results.first else {
+        guard let results = request.results, !results.isEmpty else {
             print("Depth model returned no results")
             return nil
         }
 
-        if let multiArray = first.featureValue.multiArrayValue {
-            return extractFromMultiArray(multiArray)
-        } else if let imageBuffer = first.featureValue.imageBufferValue {
-            return extractFromPixelBuffer(imageBuffer)
-        } else {
-            print("Depth output is neither multiArray nor image")
-            return nil
+        // Depth model outputs a grayscale image → Vision returns VNPixelBufferObservation
+        if let pixelObs = results.first as? VNPixelBufferObservation {
+            return extractFromPixelBuffer(pixelObs.pixelBuffer)
         }
+
+        // Fallback: some models return VNCoreMLFeatureValueObservation
+        if let featureObs = results.first as? VNCoreMLFeatureValueObservation {
+            if let multiArray = featureObs.featureValue.multiArrayValue {
+                return extractFromMultiArray(multiArray)
+            } else if let imageBuffer = featureObs.featureValue.imageBufferValue {
+                return extractFromPixelBuffer(imageBuffer)
+            }
+        }
+
+        print("Depth output type not recognized: \(type(of: results.first!))")
+        return nil
     }
 
     private nonisolated func extractFromMultiArray(_ array: MLMultiArray) -> DepthMapData? {

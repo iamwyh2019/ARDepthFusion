@@ -97,15 +97,15 @@ enum DepthFusion {
         let alpha = (n * sumDALidar - sumDA * sumLidar) / denom
         let beta = (sumLidar - alpha * sumDA) / n
 
-        guard alpha > 0 else {
-            print("DepthFusion: Negative alpha (\(alpha)) — depth inversion, skipping")
+        guard abs(alpha) > 1e-4, abs(alpha) < 1000, beta.isFinite else {
+            print("DepthFusion: Degenerate fit alpha=\(alpha) beta=\(beta), skipping")
             return nil
         }
 
-        // Apply to full depth map
+        // Apply to full depth map (clamp to positive range)
         var fusedDepth = [Float](repeating: 0, count: daW * daH)
         for i in 0..<(daW * daH) {
-            fusedDepth[i] = alpha * daArray[i] + beta
+            fusedDepth[i] = max(0.01, alpha * daArray[i] + beta)
         }
 
         let imageW = CVPixelBufferGetWidth(arFrame.capturedImage)

@@ -11,7 +11,10 @@ nonisolated private func yoloResultHandler(_ result: YOLODetectionResult) {
                 width: CGFloat(det.boxX2 - det.boxX1),
                 height: CGFloat(det.boxY2 - det.boxY1)
             ),
-            centroid: CGPoint(x: CGFloat(det.centroidX), y: CGFloat(det.centroidY))
+            centroid: CGPoint(x: CGFloat(det.centroidX), y: CGFloat(det.centroidY)),
+            mask: det.mask.isEmpty ? nil : det.mask,
+            maskWidth: det.maskWidth,
+            maskHeight: det.maskHeight
         )
     }
 
@@ -29,14 +32,16 @@ final class ObjectDetectionService: @unchecked Sendable {
 
     private init() {}
 
-    func initialize() {
+    func initialize() async {
         guard !isInitialized else { return }
-        let success = InitializeYOLO(
-            modelName: "yolo11l_seg",
-            confidenceThreshold: 0.5,
-            iouThreshold: 0.5,
-            scaleMethod: "scaleFit"
-        )
+        let success = await Task.detached(priority: .userInitiated) {
+            InitializeYOLO(
+                modelName: "yolo11l_seg",
+                confidenceThreshold: 0.7,
+                iouThreshold: 0.5,
+                scaleMethod: "scaleFit"
+            )
+        }.value
         if success {
             RegisterYOLOCallback(callback: yoloResultHandler)
             isInitialized = true
@@ -47,7 +52,7 @@ final class ObjectDetectionService: @unchecked Sendable {
     }
 
     func detect(frame: ARFrame) async -> [DetectedObject] {
-        if !isInitialized { initialize() }
+        if !isInitialized { await initialize() }
 
         guard let bgra = frame.capturedImage.toBGRAData() else {
             return []

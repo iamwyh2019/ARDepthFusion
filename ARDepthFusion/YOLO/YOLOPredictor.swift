@@ -171,6 +171,13 @@ class YOLOPredictor: @unchecked Sendable {
                     )
                 }
 
+                // Extract mask prototypes for segmentation
+                let maskProtos = getMaskProtos(masks: masks, numMasks: numMasks)
+                let protoH = masks.shape[2].intValue
+                let protoW = masks.shape[3].intValue
+                let modelW = Float(self.modelWidth)
+                let modelH = Float(self.modelHeight)
+
                 // Build Swift detection results directly — no UnsafePointer conversion needed
                 let detections = nmsPredictions.map { pred -> YOLODetection in
                     let p1 = coordinateRestorer(pred.xyxy.x1, pred.xyxy.y1)
@@ -178,6 +185,20 @@ class YOLOPredictor: @unchecked Sendable {
                     // Centroid = bbox center (no OpenCV contours needed)
                     let cx = (p1.0 + p2.0) / 2.0
                     let cy = (p1.1 + p2.1) / 2.0
+
+                    // Compute instance mask from prototypes
+                    let rawMask = getMasksFromProtos(maskProtos: maskProtos, coefficients: pred.maskCoefficients)
+                    let sigmoidMask = rawMask.withUnsafeBufferPointer { ptr in
+                        getSigmoidMask(mask: ptr.baseAddress!, maskSize: rawMask.count)
+                    }
+                    // Proto-space bbox = model bbox * (protoSize / modelSize)
+                    let protoBbox = XYXY(
+                        x1: pred.xyxy.x1 / modelW * Float(protoW),
+                        y1: pred.xyxy.y1 / modelH * Float(protoH),
+                        x2: pred.xyxy.x2 / modelW * Float(protoW),
+                        y2: pred.xyxy.y2 / modelH * Float(protoH)
+                    )
+                    let croppedMask = cropMask(mask: sigmoidMask, width: protoW, height: protoH, bbox: protoBbox)
 
                     return YOLODetection(
                         classIndex: pred.classIndex,
@@ -188,7 +209,10 @@ class YOLOPredictor: @unchecked Sendable {
                         boxX2: Int(p2.0 * scaleX),
                         boxY2: Int(p2.1 * scaleY),
                         centroidX: Int(cx * scaleX),
-                        centroidY: Int(cy * scaleY)
+                        centroidY: Int(cy * scaleY),
+                        mask: croppedMask,
+                        maskWidth: protoW,
+                        maskHeight: protoH
                     )
                 }
 

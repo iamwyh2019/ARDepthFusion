@@ -37,15 +37,30 @@ struct DetectionOverlayView: View {
     }
 
     // Camera captures in landscape-right (1920x1440), displayed in portrait.
-    // imageX -> maps to bottom of screen, imageY -> maps to right of screen
-    // screenX = imageY / imageHeight * viewWidth
-    // screenY = (1 - imageX / imageWidth) * viewHeight
+    // Step 1: Rotate 90° CW → rotated image is imageHeight x imageWidth (1440x1920)
+    // Step 2: ARView does aspect-fill into viewSize, so we must compute scale + crop offset.
     private func imageToScreen(_ rect: CGRect, viewSize: CGSize) -> CGRect {
-        let x1 = rect.minY / imageHeight * viewSize.width
-        let y1 = (1 - rect.maxX / imageWidth) * viewSize.height
-        let x2 = rect.maxY / imageHeight * viewSize.width
-        let y2 = (1 - rect.minX / imageWidth) * viewSize.height
+        // After rotation: rotated dimensions
+        let rotW = imageHeight  // 1440
+        let rotH = imageWidth   // 1920
 
-        return CGRect(x: x1, y: y1, width: x2 - x1, height: y2 - y1)
+        // Aspect-fill: scale to fill entire view, crop the excess
+        let scale = max(viewSize.width / rotW, viewSize.height / rotH)
+        let offsetX = (rotW * scale - viewSize.width) / 2
+        let offsetY = (rotH * scale - viewSize.height) / 2
+
+        // Rotation mapping: landscape (imgX, imgY) → portrait
+        // screenX ∝ (imgH - imgY), screenY ∝ imgX
+        let rotX1 = imageHeight - rect.maxY
+        let rotY1 = rect.minX
+        let rotX2 = imageHeight - rect.minY
+        let rotY2 = rect.maxX
+
+        let sx1 = rotX1 * scale - offsetX
+        let sy1 = rotY1 * scale - offsetY
+        let sx2 = rotX2 * scale - offsetX
+        let sy2 = rotY2 * scale - offsetY
+
+        return CGRect(x: sx1, y: sy1, width: sx2 - sx1, height: sy2 - sy1)
     }
 }

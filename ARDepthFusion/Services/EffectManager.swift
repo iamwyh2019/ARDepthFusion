@@ -14,11 +14,21 @@ final class EffectManager {
         in arView: ARView
     ) {
         let anchor = AnchorEntity(world: position)
-        let entity = ModelEntity()
 
-        let emitter = configureEmitter(for: type, scale: scale)
-        entity.components.set(emitter)
-        anchor.addChild(entity)
+        if type == .debugCube {
+            // 10cm × 10cm × 10cm cube with bright red material
+            let mesh = MeshResource.generateBox(size: 0.1)
+            var material = SimpleMaterial()
+            material.color = .init(tint: .red)
+            let cube = ModelEntity(mesh: mesh, materials: [material])
+            anchor.addChild(cube)
+        } else {
+            let entity = ModelEntity()
+            let emitter = configureEmitter(for: type, scale: scale)
+            entity.components.set(emitter)
+            anchor.addChild(entity)
+        }
+
         arView.scene.addAnchor(anchor)
 
         let effect = PlacedEffect(
@@ -134,6 +144,9 @@ final class EffectManager {
                 start: .single(.init(red: 1.0, green: 0.5, blue: 0.0, alpha: 1.0)),
                 end: .single(.init(red: 1.0, green: 0.1, blue: 0.0, alpha: 0.0))
             )
+
+        case .debugCube:
+            break // handled separately in placeEffect
         }
 
         return emitter

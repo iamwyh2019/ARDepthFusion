@@ -8,6 +8,7 @@ enum ParticleEffectType: String, CaseIterable {
     case snow
     case magic
     case impact
+    case debugCube
 
     var displayName: String {
         rawValue.capitalized
@@ -22,6 +23,7 @@ enum ParticleEffectType: String, CaseIterable {
         case .snow: return "snowflake"
         case .magic: return "wand.and.stars"
         case .impact: return "burst.fill"
+        case .debugCube: return "cube.fill"
         }
     }
 }

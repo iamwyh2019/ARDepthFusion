@@ -5,15 +5,15 @@
 A real-time AR iOS app that detects objects and places 3D particle effects at their world positions. Uses LiDAR + Depth Anything fusion for accurate depth estimation and occlusion.
 
 ### Core Workflow
-1. User opens app → live AR camera view
-2. User taps "Detect" button → YOLO detects objects, shows bounding boxes
-3. User taps a detected object → effect picker appears
-4. User selects a particle effect (fire, smoke, etc.)
-5. Effect is placed at the object's 3D world position (anchored, doesn't move)
-6. User can add effects to multiple objects
-7. User can delete individual effects
+1. User opens app → loading screen while ML models preload → live AR camera view
+2. User taps "Detect" button → captures still frame + camera pose
+3. YOLO + Depth run in parallel → detection results screen appears (fullScreenCover)
+4. Results screen: darkened background (30% brightness), detected objects highlighted at full brightness via segmentation masks, bounding boxes with centered labels
+5. User taps a detected object → effect picker sheet → selects effect → effect queued
+6. User taps "Back" → returns to live AR, queued effects placed at 3D world positions
+7. User can add effects to multiple objects, delete individual ones
 
-**This is a real-time AR app, NOT a photo capture + post-processing app.**
+**This is a real-time AR app with a still-frame detection results screen for object selection.**
 
 ---
 
@@ -26,7 +26,7 @@ A real-time AR iOS app that detects objects and places 3D particle effects at th
 | Orientation | Portrait only |
 | Non-LiDAR devices | Not supported (App Store filters via `UIRequiredDeviceCapabilities`) |
 | Particle size | Scaled based on bounding box size |
-| Occlusion | Depth-based occlusion (realistic) |
+| Occlusion | Disabled (conflicts with ParticleEmitterComponent stencil buffer) |
 | Multi-object | Yes, different effects on different objects |
 | UI style | Minimal (box only, tap to see class name) |
 | Detection trigger | Manual (tap "Detect" button) |
@@ -35,8 +35,9 @@ A real-time AR iOS app that detects objects and places 3D particle effects at th
 | Minimum iOS | **iOS 18.0** (required for `ParticleEmitterComponent`) |
 | Effect management | Can delete individual effects |
 | Save feature | Not needed |
-| Object detection | **YOLOUnity Framework** (user's custom plugin, uses YOLO11l) |
-| Particle effects | Fire, Smoke, Sparks, Rain, Snow, Magic, Impact (all 7) |
+| Object detection | **Integrated YOLO source** (yolo11l-seg with segmentation masks) |
+| Confidence threshold | 0.7 |
+| Particle effects | Fire, Smoke, Sparks, Rain, Snow, Magic, Impact, Debug Cube (8 types) |
 | UI Language | English |
 | ML Compute Units | **CPU + Neural Engine only** (GPU reserved for RealityKit rendering) |
 
@@ -47,7 +48,7 @@ A real-time AR iOS app that detects objects and places 3D particle effects at th
 - **Language**: Swift 5.9+
 - **UI**: SwiftUI
 - **AR Framework**: RealityKit (`ARView`, `ParticleEmitterComponent`)
-- **Object Detection**: YOLOUnity.framework (external, provided by user)
+- **Object Detection**: Integrated YOLO source (yolo11l-seg, with segmentation masks)
 - **Depth Estimation**: CoreML (Depth Anything V2 Small F16)
 - **Depth Source**: ARKit LiDAR (`ARFrame.sceneDepth`)
 - **Minimum iOS**: 18.0
@@ -59,42 +60,44 @@ A real-time AR iOS app that detects objects and places 3D particle effects at th
 
 ```
 ARDepthFusion/
-├── App/
-│   ├── ARDepthFusionApp.swift          # App entry point
-│   └── ContentView.swift                # Main view container
+├── ARDepthFusionApp.swift               # App entry point
+├── ContentView.swift                     # Main view, detection flow, effect placement
 │
 ├── Models/
-│   ├── DetectedObject.swift             # Detection result model
+│   ├── DetectedObject.swift             # Detection result (bbox, class, mask, centroid)
 │   ├── DepthFusionResult.swift          # Fused depth map model
 │   ├── PlacedEffect.swift               # Placed effect tracking
-│   └── ParticleEffectType.swift         # Effect type enum
+│   └── ParticleEffectType.swift         # Effect type enum (8 types incl. debugCube)
 │
 ├── Services/
-│   ├── ObjectDetectionService.swift     # YOLOUnity wrapper
+│   ├── ObjectDetectionService.swift     # YOLO wrapper (C ABI bridge)
 │   ├── DepthEstimator.swift             # Depth Anything CoreML inference
 │   ├── DepthFusion.swift                # LiDAR + Depth Anything fusion
-│   └── EffectManager.swift              # Manage placed effects
+│   └── EffectManager.swift              # Manage placed effects (particles + debug cube)
 │
 ├── Views/
 │   ├── ARContainerView.swift            # RealityKit ARView wrapper
-│   ├── DetectionOverlayView.swift       # Bounding box overlay
+│   ├── DetectionResultsView.swift       # Still-frame results with mask compositing
+│   ├── DetectionOverlayView.swift       # Live bounding box overlay (legacy)
 │   ├── EffectPickerView.swift           # Effect selection sheet
 │   ├── ControlPanelView.swift           # Detect button, etc.
 │   └── EffectListView.swift             # List of placed effects (for deletion)
+│
+├── YOLO/
+│   ├── YOLOBridge.swift                 # C ABI types (YOLODetection, callbacks)
+│   ├── YOLOPredictor.swift              # CoreML inference + NMS + mask extraction
+│   └── YOLOUtils.swift                  # Mask proto ops, sigmoid, crop, upsample
 │
 ├── Utilities/
 │   ├── CVPixelBuffer+Extensions.swift
 │   ├── MLMultiArray+Extensions.swift
 │   ├── simd+Extensions.swift
-│   └── ARView+Extensions.swift
+│   └── ARView+Extensions.swift          # worldPosition (image point + depth → 3D)
 │
 ├── Frameworks/
-│   └── YOLOUnity.framework              # User-provided YOLO framework
+│   └── YOLOUnity.framework              # C ABI framework for YOLO model loading
 │
-├── Resources/
-│   ├── DepthAnythingV2SmallF16.mlpackage
-│   └── Assets.xcassets
-│
+├── DepthAnythingV2SmallF16.mlpackage    # Depth estimation model
 └── Info.plist
 ```
 
@@ -111,24 +114,25 @@ let config = MLModelConfiguration()
 config.computeUnits = .cpuAndNeuralEngine  // NOT .all, NOT .cpuAndGPU
 ```
 
-### 2. YOLOUnity Framework Integration
+### 2. YOLO Integration (yolo11l-seg)
 
-The user has a custom `YOLOUnity.framework` that:
-- Wraps YOLO11l model
-- Handles post-processing (NMS, etc.)
-- Returns detection results
+YOLO is integrated via source code in `ARDepthFusion/YOLO/` with a C ABI bridge to `YOLOUnity.framework`:
+- Model: `yolo11l-seg` (segmentation variant with instance masks)
+- Confidence threshold: 0.7, IOU threshold: 0.5
+- Returns per-detection: bounding box, class, confidence, centroid, segmentation mask
+- Masks are smooth sigmoid values [0,1] at proto resolution (160x120), cropped to bbox
+- Model files use hyphens (`yolo11l-seg`), but API expects underscores (`yolo11l_seg`)
 
-**Claude Code should examine this framework to understand its API.**
+### 2b. Detection Results Screen (DetectionResultsView)
 
-Likely usage pattern (to be confirmed by examining the framework):
-```swift
-import YOLOUnity
-
-// Hypothetical API - examine framework for actual interface
-let detector = YOLODetector()
-let results = detector.detect(pixelBuffer: frame.capturedImage)
-// results likely contains: class, confidence, boundingBox, etc.
-```
+Full-screen still-frame view shown after detection:
+- **Compositing**: CIExposureAdjust (EV=-1.74, 30% brightness) for background, full brightness for masked regions via CIBlendWithMask
+- **Mask upsampling**: vImage bilinear interpolation (`upsampleMask` in YOLOUtils) from proto 160x120 to full 1920x1440
+- **Mask Y-flip**: Required because mask pixel data is Y=0-at-top but CIImage(cgImage:) composites with Y=0-at-bottom
+- **Annotations**: Bounding boxes + centered labels drawn directly on CGImage (pixel-perfect)
+- **Landscape→Portrait rotation**: `.oriented(.right)` on CIImage; bbox mapping: `portrait_x = landscape_y, portrait_y = landscape_x`
+- **Tap handling**: Converts view-space tap → portrait image space → find matching detection bbox
+- **Effect flow**: Tap object → EffectPickerView sheet → effect queued → on dismiss, placed at 3D position
 
 ### 3. Depth Fusion Algorithm
 
@@ -269,207 +273,48 @@ class DepthFusion {
 
 ### 4. RealityKit AR Setup
 
-```swift
-import SwiftUI
-import RealityKit
-import ARKit
+**IMPORTANT**: `.occlusion` scene understanding is intentionally NOT enabled — it creates a stencil buffer that conflicts with `ParticleEmitterComponent`'s transparent render pass, causing Metal validation assertions.
 
-struct ARContainerView: UIViewRepresentable {
-    @Binding var arView: ARView?
-    
-    func makeUIView(context: Context) -> ARView {
-        let arView = ARView(frame: .zero)
-        
-        // Configure AR session with LiDAR depth
-        let config = ARWorldTrackingConfiguration()
-        config.frameSemantics.insert(.sceneDepth)
-        config.planeDetection = [.horizontal, .vertical]
-        
-        arView.session.run(config)
-        
-        // Enable depth-based occlusion
-        arView.environment.sceneUnderstanding.options.insert(.occlusion)
-        
-        DispatchQueue.main.async {
-            self.arView = arView
-        }
-        
-        return arView
-    }
-    
-    func updateUIView(_ uiView: ARView, context: Context) {}
-}
+```swift
+let config = ARWorldTrackingConfiguration()
+config.frameSemantics.insert(.sceneDepth)
+config.planeDetection = [.horizontal, .vertical]
+// Do NOT add: arView.environment.sceneUnderstanding.options.insert(.occlusion)
+arView.session.run(config)
 ```
 
 ### 5. Particle Effects (iOS 18+)
 
-```swift
-import RealityKit
+8 effect types: fire, smoke, sparks, rain, snow, magic, impact, debugCube.
 
-enum ParticleEffectType: String, CaseIterable, Identifiable {
-    case fire = "Fire"
-    case smoke = "Smoke"
-    case sparks = "Sparks"
-    case rain = "Rain"
-    case snow = "Snow"
-    case magic = "Magic"
-    case impact = "Impact"
-    
-    var id: String { rawValue }
-    
-    var icon: String {
-        switch self {
-        case .fire: return "🔥"
-        case .smoke: return "💨"
-        case .sparks: return "✨"
-        case .rain: return "🌧️"
-        case .snow: return "❄️"
-        case .magic: return "🪄"
-        case .impact: return "💥"
-        }
-    }
-}
-
-struct PlacedEffect: Identifiable {
-    let id: UUID
-    let type: ParticleEffectType
-    let objectClass: String
-    let anchor: AnchorEntity
-}
-
-@Observable
-class EffectManager {
-    var placedEffects: [PlacedEffect] = []
-    
-    func placeEffect(
-        type: ParticleEffectType,
-        objectClass: String,
-        at worldPosition: SIMD3<Float>,
-        scale: Float,
-        in arView: ARView
-    ) {
-        let anchor = AnchorEntity(world: worldPosition)
-        
-        let entity = Entity()
-        var emitter = ParticleEmitterComponent()
-        configureEmitter(&emitter, for: type, scale: scale)
-        entity.components.set(emitter)
-        
-        anchor.addChild(entity)
-        arView.scene.addAnchor(anchor)
-        
-        let effect = PlacedEffect(
-            id: UUID(),
-            type: type,
-            objectClass: objectClass,
-            anchor: anchor
-        )
-        placedEffects.append(effect)
-    }
-    
-    func removeEffect(_ effect: PlacedEffect) {
-        effect.anchor.removeFromParent()
-        placedEffects.removeAll { $0.id == effect.id }
-    }
-    
-    func clearAll() {
-        for effect in placedEffects {
-            effect.anchor.removeFromParent()
-        }
-        placedEffects.removeAll()
-    }
-    
-    private func configureEmitter(_ emitter: inout ParticleEmitterComponent,
-                                  for type: ParticleEffectType, scale: Float) {
-        switch type {
-        case .fire:
-            emitter.emitterShape = .cone
-            emitter.emitterShapeSize = [0.1 * scale, 0.1 * scale, 0.1 * scale]
-            emitter.birthRate = 200
-            emitter.lifeSpan = 0.8
-            emitter.speed = 0.3 * scale
-            // Add color gradient: yellow → orange → red
-            
-        case .smoke:
-            emitter.emitterShape = .sphere
-            emitter.emitterShapeSize = [0.15 * scale, 0.15 * scale, 0.15 * scale]
-            emitter.birthRate = 80
-            emitter.lifeSpan = 2.0
-            emitter.speed = 0.15 * scale
-            
-        case .sparks:
-            emitter.emitterShape = .point
-            emitter.birthRate = 150
-            emitter.lifeSpan = 0.5
-            emitter.speed = 0.8 * scale
-            
-        case .rain:
-            emitter.emitterShape = .plane
-            emitter.emitterShapeSize = [0.5 * scale, 0, 0.5 * scale]
-            emitter.birthRate = 300
-            emitter.lifeSpan = 1.5
-            emitter.speed = 2.0
-            
-        case .snow:
-            emitter.emitterShape = .plane
-            emitter.emitterShapeSize = [0.5 * scale, 0, 0.5 * scale]
-            emitter.birthRate = 100
-            emitter.lifeSpan = 3.0
-            emitter.speed = 0.3
-            
-        case .magic:
-            emitter.emitterShape = .sphere
-            emitter.emitterShapeSize = [0.2 * scale, 0.2 * scale, 0.2 * scale]
-            emitter.birthRate = 50
-            emitter.lifeSpan = 1.5
-            emitter.speed = 0.2 * scale
-            
-        case .impact:
-            emitter.emitterShape = .sphere
-            emitter.emitterShapeSize = [0.05 * scale, 0.05 * scale, 0.05 * scale]
-            emitter.birthRate = 500
-            emitter.lifeSpan = 0.4
-            emitter.speed = 1.5 * scale
-            emitter.birthRateVariation = 100
-        }
-    }
-}
-```
+`debugCube` places a 10cm red `ModelEntity` box (for position verification) instead of a `ParticleEmitterComponent`. All other effects use `ParticleEmitterComponent` with scale-dependent emitter sizes.
 
 ### 6. 2D → 3D Unprojection
 
+**CRITICAL**: `simd_float3x3` is **column-major** — `matrix[column][row]`.
+
 ```swift
-extension ARView {
-    
-    /// Convert 2D screen point + depth to 3D world position
-    func unproject(screenPoint: CGPoint, depth: Float) -> SIMD3<Float>? {
-        guard let frame = session.currentFrame else { return nil }
-        
-        let intrinsics = frame.camera.intrinsics
-        let imageRes = frame.camera.imageResolution
-        
-        // Screen → normalized → image coordinates
-        let imageX = Float(screenPoint.x / bounds.width) * Float(imageRes.width)
-        let imageY = Float(screenPoint.y / bounds.height) * Float(imageRes.height)
-        
-        let fx = intrinsics[0, 0]
-        let fy = intrinsics[1, 1]
-        let cx = intrinsics[2, 0]
-        let cy = intrinsics[2, 1]
-        
-        // Unproject to camera space
-        let z = depth
-        let x = (imageX - cx) * z / fx
-        let y = (imageY - cy) * z / fy
-        
-        // Transform to world space
-        let cameraPoint = SIMD4<Float>(x, y, z, 1.0)
-        let worldPoint = frame.camera.transform * cameraPoint
-        
-        return SIMD3<Float>(worldPoint.x, worldPoint.y, worldPoint.z)
-    }
-}
+// CORRECT:
+let fx = intrinsics[0][0]  // column 0, row 0
+let fy = intrinsics[1][1]  // column 1, row 1
+let cx = intrinsics[2][0]  // column 2, row 0 (principal point x)
+let cy = intrinsics[2][1]  // column 2, row 1 (principal point y)
+
+// WRONG (these are always 0):
+let cx = intrinsics[0][2]  // column 0, row 2 — NOT the principal point!
+let cy = intrinsics[1][2]  // column 1, row 2 — NOT the principal point!
 ```
+
+Unprojection: pixel → camera space → world space:
+```swift
+let x = (Float(imagePoint.x) - cx) / fx * depth
+let y = (Float(imagePoint.y) - cy) / fy * depth
+let z = -depth  // Camera looks along -Z in ARKit
+let cameraPoint = SIMD4<Float>(x, y, z, 1.0)
+let worldPoint = cameraTransform * cameraPoint
+```
+
+**ARFrame retention**: Do NOT store `ARFrame` — `CIImage(cvPixelBuffer:)` retains the CVPixelBuffer, starving ARSession. Instead, immediately copy pixels via `CIContext.createCGImage` → `CIImage(cgImage:)`, and store only `intrinsics` + `camera.transform`.
 
 ### 7. Effect Scale from Bounding Box
 
@@ -499,27 +344,28 @@ extension Comparable {
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                     App Running (Live AR View)                    │
+│              App Launch → Preload YOLO + DepthAnything            │
+└──────────────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                     Live AR View (ARContainerView)                │
 └──────────────────────────────────────────────────────────────────┘
                                │
                     User taps "Detect" button
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│  ARFrame                                                          │
-│    ├── capturedImage (CVPixelBuffer, 1920×1440)                  │
-│    ├── sceneDepth.depthMap (LiDAR, 256×192, Float32)             │
-│    ├── sceneDepth.confidenceMap (256×192, UInt8)                 │
-│    └── camera.intrinsics / camera.transform                       │
+│  Capture: copy pixel data (avoid ARFrame retention),             │
+│           store intrinsics + camera.transform                    │
 └──────────────────────────────────────────────────────────────────┘
                                │
               ┌────────────────┼────────────────┐
               ▼                ▼                ▼
       ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
-      │ YOLOUnity   │  │   Depth     │  │   LiDAR     │
-      │ Framework   │  │  Anything   │  │   Depth     │
-      │ (YOLO11l)   │  │  (CoreML)   │  │  (raw)      │
-      │             │  │ CPU+NE only │  │             │
+      │ YOLO11l-seg │  │   Depth     │  │   LiDAR     │
+      │ (det+masks) │  │  Anything   │  │   Depth     │
+      │             │  │ CPU+NE only │  │  (raw)      │
       └─────────────┘  └─────────────┘  └─────────────┘
               │                │                │
               │                └───────┬────────┘
@@ -527,54 +373,47 @@ extension Comparable {
               │                ┌─────────────────┐
               │                │  DepthFusion    │
               │                │  α, β fitting   │
-              │                │  D = α·rel + β  │
               │                └─────────────────┘
               │                        │
               ▼                        ▼
-      ┌─────────────┐          ┌─────────────┐
-      │ Detections  │          │Metric Depth │
-      │ - bbox      │          │  (meters)   │
-      │ - class     │          │  518×518    │
-      │ - score     │          └─────────────┘
-      └─────────────┘                 │
+      ┌────────────────┐       ┌─────────────┐
+      │ Detections     │       │Metric Depth │
+      │ - bbox, class  │       │  (meters)   │
+      │ - mask [0,1]   │       └─────────────┘
+      │ - centroid     │              │
+      └────────────────┘              │
               │                       │
               └───────────┬───────────┘
                           ▼
-              ┌─────────────────────┐
-              │ Show bounding boxes │
-              │ (tap to see class)  │
-              └─────────────────────┘
+         ┌─────────────────────────────────┐
+         │    DetectionResultsView         │
+         │  (fullScreenCover)              │
+         │                                 │
+         │  Composited image:              │
+         │  - Background at 30% brightness │
+         │  - Masked objects full bright   │
+         │  - Bboxes + centered labels     │
+         │                                 │
+         │  Tap object → EffectPicker      │
+         │  → queue effect                 │
+         └─────────────────────────────────┘
                           │
-                  User taps a box
+                    User taps "Back"
                           ▼
-              ┌─────────────────────┐
-              │  EffectPickerView   │
-              │ 🔥💨✨🌧️❄️🪄💥       │
-              └─────────────────────┘
-                          │
-                  User selects effect
-                          ▼
-              ┌─────────────────────┐
-              │ 1. Get bbox center  │
-              │ 2. Sample depth     │
-              │ 3. Unproject → 3D   │
-              │ 4. Calc scale       │
-              └─────────────────────┘
-                          │
-                          ▼
-              ┌─────────────────────┐
-              │  EffectManager      │
-              │  .placeEffect()     │
-              │  → AnchorEntity     │
-              │  → Particle emitter │
-              └─────────────────────┘
+         ┌─────────────────────────────────┐
+         │  processPendingEffects()        │
+         │  For each queued effect:        │
+         │  1. Sample fused depth          │
+         │  2. Unproject centroid → 3D     │
+         │  3. Calculate scale from bbox   │
+         │  4. EffectManager.placeEffect() │
+         └─────────────────────────────────┘
                           │
                           ▼
-              ┌─────────────────────┐
-              │ Effect renders with │
-              │ depth-based         │
-              │ occlusion           │
-              └─────────────────────┘
+         ┌─────────────────────────────────┐
+         │  Back to Live AR View           │
+         │  Effects anchored in world      │
+         └─────────────────────────────────┘
 ```
 
 ---
@@ -624,27 +463,35 @@ huggingface-cli download \
 
 ## UI Layout (Portrait)
 
+### Main AR View
 ```
 ┌─────────────────────────────┐
-│         Status Bar          │
-├─────────────────────────────┤
-│                             │
+│ LiDAR: ON         2 effects │
 │                             │
 │         AR Camera           │
 │           View              │
+│      (with placed effects)  │
 │                             │
-│      ┌─────────┐            │
-│      │ object  │ ← tap to   │
-│      └─────────┘   add fx   │
+│  Effect List (swipe delete) │
+│  [Detect]  Status  [Clear]  │
+└─────────────────────────────┘
+```
+
+### Detection Results Screen (fullScreenCover)
+```
+┌─────────────────────────────┐
+│ [< Back]                    │
 │                             │
+│  ┌───────────────────────┐  │
+│  │ Darkened background   │  │
+│  │                       │  │
+│  │   ┌─────────┐         │  │  ← object at full brightness (mask)
+│  │   │ cup 95% │         │  │  ← centered label + green bbox
+│  │   └─────────┘         │  │
+│  │                       │  │
+│  └───────────────────────┘  │
 │                             │
-├─────────────────────────────┤
-│                             │
-│  [ 🔍 Detect ]  [ 🗑 Clear ] │
-│                             │
-│  Active Effects:            │
-│  🔥 cup  ×    💨 chair  ×   │ ← tap × to delete
-│                             │
+│  3 objects detected (245ms) │
 └─────────────────────────────┘
 ```
 
@@ -652,11 +499,12 @@ huggingface-cli download \
 
 ## Critical Notes for Implementation
 
-### ⚠️ YOLOUnity Framework
-- User-provided `.framework` file
-- **Examine headers/API before implementing**
-- Uses YOLO11l model internally
-- Handles NMS post-processing
+### ⚠️ YOLO Integration
+- Model: `yolo11l-seg` (segmentation with instance masks)
+- C ABI bridge via `YOLOUnity.framework` + Swift source in `YOLO/`
+- Confidence threshold: 0.7, IOU: 0.5
+- Masks: smooth sigmoid [0,1] at proto resolution (160x120), cropped to bbox
+- Model file uses hyphens (`yolo11l-seg`), API expects underscores (`yolo11l_seg`)
 
 ### ⚠️ CoreML Compute Units
 ```swift
@@ -672,25 +520,23 @@ config.computeUnits = .all
 - Set deployment target to iOS 18.0
 
 ### ⚠️ Coordinate Systems
-| System | Origin | Y Direction |
-|--------|--------|-------------|
-| Vision | Bottom-left | Up |
-| UIKit | Top-left | Down |
-| RealityKit | Center | Up |
 
-Convert bounding boxes from Vision to screen coordinates:
+| System | Origin | Y Direction | Notes |
+|--------|--------|-------------|-------|
+| Camera image | Top-left | Down | Landscape-right 1920x1440 |
+| CIImage (CGImage-backed) | Bottom-left | Up | Y=0 at visual bottom |
+| Portrait CGImage | Top-left | Down | After `.oriented(.right)`: 1440x1920 |
+| UIKit / SwiftUI | Top-left | Down | Screen coordinates |
+
+**Landscape→Portrait bbox mapping** (for CGImage-backed CIImage + `.oriented(.right)`):
 ```swift
-// Vision bbox (bottom-left origin, normalized)
-let visionRect = detection.boundingBox
-
-// Convert to UIKit (top-left origin)
-let screenRect = CGRect(
-    x: visionRect.minX * viewWidth,
-    y: (1 - visionRect.maxY) * viewHeight,  // Flip Y
-    width: visionRect.width * viewWidth,
-    height: visionRect.height * viewHeight
-)
+// Landscape Y maps directly to portrait X (no flip needed)
+func landscapeToPortrait(_ rect: CGRect) -> CGRect {
+    CGRect(x: rect.minY, y: rect.minX, width: rect.height, height: rect.width)
+}
 ```
+
+**Mask Y-flip**: Mask pixel data is in pixel-buffer coords (Y=0 at top), but `CIImage(cgImage:)` composites with Y=0 at bottom. Must flip vertically when converting mask float→UInt8 for CGImage creation.
 
 ### ⚠️ Depth Fusion
 - **DO NOT upsample LiDAR**
@@ -701,18 +547,22 @@ let screenRect = CGRect(
 
 ## Testing Checklist
 
+- [ ] App launches with loading screen, models preload
 - [ ] AR view displays camera feed
 - [ ] `sceneDepth != nil` (LiDAR working)
-- [ ] YOLOUnity loads and detects
+- [ ] YOLO loads and detects with segmentation masks
 - [ ] Depth Anything runs on CPU + Neural Engine
-- [ ] Fusion produces valid α (0.5-5.0 typical), β
-- [ ] Bounding boxes appear on tap "Detect"
-- [ ] Tapping box shows effect picker
-- [ ] Effects appear at correct 3D position
+- [ ] Fusion produces valid alpha, beta
+- [ ] Detection results screen appears with composited image
+- [ ] Masks highlight objects at full brightness, background darkened
+- [ ] Bounding boxes + labels align with objects
+- [ ] Tapping object shows effect picker
+- [ ] Effects placed at correct 3D world position (verify with debugCube)
 - [ ] Effect scale matches object size
-- [ ] Occlusion works (fx hidden behind objects)
 - [ ] Multiple effects on different objects
 - [ ] Delete individual effects works
+- [ ] No ARFrame retention warnings (check console)
+- [ ] No Metal stencil errors
 - [ ] Portrait lock enforced
 
 ---
