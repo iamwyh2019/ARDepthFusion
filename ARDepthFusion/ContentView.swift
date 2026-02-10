@@ -103,7 +103,7 @@ struct ContentView: View {
             let start = CFAbsoluteTimeGetCurrent()
 
             async let yoloResult = ObjectDetectionService.shared.detect(frame: frame)
-            async let depthEstResult = DepthEstimator.shared.estimateDepth(
+            async let depthEstResult = DepthEstimator.shared?.estimateDepth(
                 pixelBuffer: frame.capturedImage
             )
 

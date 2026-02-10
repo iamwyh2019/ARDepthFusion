@@ -2,6 +2,7 @@ import Accelerate
 import CoreML
 import CoreImage
 import CoreVideo
+import Vision
 
 struct DepthMapData: Sendable {
     let values: [Float]
@@ -10,57 +11,81 @@ struct DepthMapData: Sendable {
 }
 
 final class DepthEstimator: @unchecked Sendable {
-    static let shared = DepthEstimator()
+    nonisolated static let shared = DepthEstimator()
 
-    private var model: MLModel?
+    nonisolated let model: VNCoreMLModel
+    private let lock = NSLock()
+    nonisolated(unsafe) private var pendingContinuation: CheckedContinuation<DepthMapData?, Never>?
 
-    private init() {}
-
-    private func loadModel() throws -> MLModel {
-        if let model { return model }
-
+    private init?() {
         let config = MLModelConfiguration()
         config.computeUnits = .cpuAndNeuralEngine
 
-        let model = try DepthAnythingV2SmallF16(configuration: config).model
-        self.model = model
+        guard let coreMLModel = try? DepthAnythingV2SmallF16(configuration: config).model,
+              let vnModel = try? VNCoreMLModel(for: coreMLModel) else {
+            print("Failed to load Depth Anything V2 model")
+            return nil
+        }
+        self.model = vnModel
         print("Depth Anything V2 model loaded")
-        return model
     }
 
     nonisolated func estimateDepth(pixelBuffer: CVPixelBuffer) async -> DepthMapData? {
         let start = CFAbsoluteTimeGetCurrent()
 
-        do {
-            let model = try await MainActor.run { try loadModel() }
-            let input = try MLDictionaryFeatureProvider(
-                dictionary: ["image": pixelBuffer]
-            )
-            let output = try await Task.detached(priority: .userInitiated) {
-                try model.prediction(from: input)
-            }.value
+        let result: DepthMapData? = await withCheckedContinuation { continuation in
+            lock.lock()
+            pendingContinuation = continuation
+            lock.unlock()
 
-            guard let depthFeature = output.featureValue(for: "depth") else {
-                print("Depth model returned no depth output")
-                return nil
+            let request = VNCoreMLRequest(model: model) { [self] request, error in
+                let depthData = self.processResult(request: request, error: error)
+                lock.lock()
+                let cont = pendingContinuation
+                pendingContinuation = nil
+                lock.unlock()
+                cont?.resume(returning: depthData)
             }
+            request.imageCropAndScaleOption = .scaleFill
 
-            let depthData: DepthMapData?
-
-            if let multiArray = depthFeature.multiArrayValue {
-                depthData = extractFromMultiArray(multiArray)
-            } else if let imageBuffer = depthFeature.imageBufferValue {
-                depthData = extractFromPixelBuffer(imageBuffer)
-            } else {
-                print("Depth output is neither multiArray nor image")
-                return nil
+            let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
+            do {
+                try handler.perform([request])
+            } catch {
+                print("Depth estimation failed: \(error.localizedDescription)")
+                lock.lock()
+                let cont = pendingContinuation
+                pendingContinuation = nil
+                lock.unlock()
+                cont?.resume(returning: nil)
             }
+        }
 
-            let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000
+        let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000
+        if result != nil {
             print(String(format: "Depth Anything inference: %.0fms", elapsed))
-            return depthData
-        } catch {
-            print("Depth estimation failed: \(error.localizedDescription)")
+        }
+        return result
+    }
+
+    private nonisolated func processResult(request: VNRequest, error: Error?) -> DepthMapData? {
+        if let error {
+            print("Depth estimation error: \(error.localizedDescription)")
+            return nil
+        }
+
+        guard let results = request.results as? [VNCoreMLFeatureValueObservation],
+              let first = results.first else {
+            print("Depth model returned no results")
+            return nil
+        }
+
+        if let multiArray = first.featureValue.multiArrayValue {
+            return extractFromMultiArray(multiArray)
+        } else if let imageBuffer = first.featureValue.imageBufferValue {
+            return extractFromPixelBuffer(imageBuffer)
+        } else {
+            print("Depth output is neither multiArray nor image")
             return nil
         }
     }
@@ -94,7 +119,6 @@ final class DepthEstimator: @unchecked Sendable {
 
         switch pixelFormat {
         case kCVPixelFormatType_DepthFloat32:
-            // Float32 grayscale
             for y in 0..<h {
                 let rowPtr = baseAddress.advanced(by: y * bytesPerRow)
                     .assumingMemoryBound(to: Float32.self)
@@ -103,7 +127,6 @@ final class DepthEstimator: @unchecked Sendable {
                 }
             }
         case kCVPixelFormatType_OneComponent16Half:
-            // Float16 grayscale
             for y in 0..<h {
                 let rowPtr = baseAddress.advanced(by: y * bytesPerRow)
                     .assumingMemoryBound(to: UInt16.self)
@@ -112,7 +135,6 @@ final class DepthEstimator: @unchecked Sendable {
                 }
             }
         case kCVPixelFormatType_OneComponent8:
-            // UInt8 grayscale, normalize to 0-1
             for y in 0..<h {
                 let rowPtr = baseAddress.advanced(by: y * bytesPerRow)
                     .assumingMemoryBound(to: UInt8.self)
@@ -121,7 +143,6 @@ final class DepthEstimator: @unchecked Sendable {
                 }
             }
         default:
-            // Try treating as float32 single channel
             let totalFloats = bytesPerRow * h / MemoryLayout<Float32>.size
             if totalFloats >= w * h {
                 for y in 0..<h {

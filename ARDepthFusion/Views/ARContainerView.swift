@@ -19,7 +19,7 @@ struct ARContainerView: UIViewRepresentable {
         arView.session.delegate = coordinator
         arView.session.run(config)
 
-        arViewRef(arView)
+        DispatchQueue.main.async { arViewRef(arView) }
         return arView
     }
 
