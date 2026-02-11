@@ -4,8 +4,7 @@ import CoreGraphics
 func calculateEffectScale(
     boundingBox: CGRect,
     depth: Float,
-    intrinsics: simd_float3x3,
-    imageWidth: Float
+    intrinsics: simd_float3x3
 ) -> Float {
     let fx = intrinsics[0][0]
     let bboxWidthPixels = Float(boundingBox.width)

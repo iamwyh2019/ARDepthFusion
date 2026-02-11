@@ -22,6 +22,16 @@ final class EffectManager: ObservableObject {
         return cache
     }()
 
+    deinit {
+        // Clean up all pooled players and their observers
+        for (_, pool) in preparedPlayers {
+            for prepared in pool {
+                cleanupPlayer(prepared)
+            }
+        }
+        preparedPlayers.removeAll()
+    }
+
     struct PreparedPlayer {
         let player: AVPlayer
         let videoOutput: AVPlayerItemVideoOutput
@@ -55,15 +65,10 @@ final class EffectManager: ObservableObject {
                 for _ in 0..<poolSize {
                     group.addTask { @MainActor in
                         let prepared = self.createPlayer(url: info.url)
-                        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-                            prepared.player.preroll(atRate: 1.0) { _ in
-                                cont.resume()
-                            }
-                        }
+                        await self.waitForReadyAndPreroll(prepared.player)
                         var pool = self.preparedPlayers[videoName] ?? []
                         pool.append(prepared)
                         self.preparedPlayers[videoName] = pool
-                        print("[EffectManager] Prerolled \(videoName) (\(pool.count)/\(self.poolSize))")
                     }
                 }
             }
@@ -78,17 +83,15 @@ final class EffectManager: ObservableObject {
         guard currentCount < poolSize else { return }
 
         let prepared = createPlayer(url: info.url)
-        prepared.player.preroll(atRate: 1.0) { [weak self] _ in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                var pool = self.preparedPlayers[videoName] ?? []
-                guard pool.count < self.poolSize else {
-                    self.cleanupPlayer(prepared)
-                    return
-                }
-                pool.append(prepared)
-                self.preparedPlayers[videoName] = pool
+        Task {
+            await waitForReadyAndPreroll(prepared.player)
+            var pool = preparedPlayers[videoName] ?? []
+            guard pool.count < poolSize else {
+                cleanupPlayer(prepared)
+                return
             }
+            pool.append(prepared)
+            preparedPlayers[videoName] = pool
         }
     }
 
@@ -156,23 +159,20 @@ final class EffectManager: ObservableObject {
     }
 
     func removeEffect(_ effect: PlacedEffect) {
-        if let videoNode = effect.node as? VideoEffectNode {
-            videoNode.stop()
-        } else {
-            effect.node.removeFromParentNode()
-        }
+        // removeFromParentNode() triggers VideoEffectNode.stop() via override
+        effect.node.removeFromParentNode()
         placedEffects.removeAll { $0.id == effect.id }
     }
 
     func clearAll() {
         for effect in placedEffects {
-            if let videoNode = effect.node as? VideoEffectNode {
-                videoNode.stop()
-            } else {
-                effect.node.removeFromParentNode()
-            }
+            effect.node.removeFromParentNode()
         }
         placedEffects.removeAll()
+        // Reclaim stale Metal texture references
+        if let cache = metalTextureCache {
+            CVMetalTextureCacheFlush(cache, 0)
+        }
     }
 
     // MARK: - Private
@@ -206,17 +206,42 @@ final class EffectManager: ObservableObject {
         guard currentCount < poolSize else { return }
 
         let prepared = createPlayer(url: url)
-        prepared.player.preroll(atRate: 1.0) { [weak self] _ in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                var pool = self.preparedPlayers[videoName] ?? []
-                guard pool.count < self.poolSize else {
-                    // Pool was filled by another replenish — clean up this one
-                    self.cleanupPlayer(prepared)
-                    return
+        Task {
+            await waitForReadyAndPreroll(prepared.player)
+            var pool = preparedPlayers[videoName] ?? []
+            guard pool.count < poolSize else {
+                cleanupPlayer(prepared)
+                return
+            }
+            pool.append(prepared)
+            preparedPlayers[videoName] = pool
+        }
+    }
+
+    /// Wait for AVPlayer to reach .readyToPlay, then preroll it.
+    /// AVPlayer.preroll crashes if called before status is ready.
+    private func waitForReadyAndPreroll(_ player: AVPlayer) async {
+        // Wait for readyToPlay status via KVO.
+        // Use .initial option to avoid race: if the player becomes ready
+        // between our check and observation setup, .initial fires immediately.
+        if player.status != .readyToPlay {
+            var observation: NSKeyValueObservation?
+            var resumed = false
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                observation = player.observe(\.status, options: [.new, .initial]) { player, _ in
+                    if !resumed && (player.status == .readyToPlay || player.status == .failed) {
+                        resumed = true
+                        cont.resume()
+                    }
                 }
-                pool.append(prepared)
-                self.preparedPlayers[videoName] = pool
+            }
+            observation?.invalidate()
+        }
+        guard player.status == .readyToPlay else { return }
+        // Now safe to preroll
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            player.preroll(atRate: 1.0) { _ in
+                cont.resume()
             }
         }
     }

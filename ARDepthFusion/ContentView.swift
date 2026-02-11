@@ -4,6 +4,8 @@ import ARKit
 import CoreImage
 import CoreVideo
 
+private let sharedCIContext = CIContext(options: [.useSoftwareRenderer: false])
+
 struct ContentView: View {
     @StateObject private var coordinator = ARSessionCoordinator()
     @State private var sceneView: ARSCNView?
@@ -31,8 +33,8 @@ struct ContentView: View {
     // Per-detection depth samples (LiDAR-preferred, fused fallback)
     @State private var depthSamples: [DepthSample?] = []
 
-    // Queued effects (placed after dismissing results screen)
-    @State private var pendingEffects: [(type: EffectType, detection: DetectedObject)] = []
+    // Queued effects with pre-computed depth (placed after dismissing results screen)
+    @State private var pendingEffects: [(type: EffectType, detection: DetectedObject, depth: DepthSample)] = []
 
     var body: some View {
         ZStack {
@@ -147,8 +149,15 @@ struct ContentView: View {
                     elapsedMs: detectionElapsedMs,
                     depthSamples: depthSamples,
                     onPlaceEffect: { type, detection in
-                        pendingEffects.append((type: type, detection: detection))
-                        effectManager.preparePlayer(for: type)
+                        // Look up the pre-computed depth sample for this detection
+                        // so placement uses the same depth the user saw on screen.
+                        let idx = detections.firstIndex(where: { $0.id == detection.id })
+                        if let idx,
+                           idx < depthSamples.count,
+                           let sample = depthSamples[idx] {
+                            pendingEffects.append((type: type, detection: detection, depth: sample))
+                            effectManager.preparePlayer(for: type)
+                        }
                     }
                 )
             }
@@ -170,9 +179,8 @@ struct ContentView: View {
 
         // Copy pixel data immediately to avoid retaining the ARFrame's CVPixelBuffer.
         // CIImage(cvPixelBuffer:) holds a reference to the buffer, starving ARSession.
-        let ciContext = CIContext(options: [.useSoftwareRenderer: false])
         let tempCI = CIImage(cvPixelBuffer: frame.capturedImage)
-        if let cgCopy = ciContext.createCGImage(tempCI, from: tempCI.extent) {
+        if let cgCopy = sharedCIContext.createCGImage(tempCI, from: tempCI.extent) {
             capturedCIImage = CIImage(cgImage: cgCopy)
         }
         capturedIntrinsics = frame.camera.intrinsics
@@ -311,20 +319,19 @@ struct ContentView: View {
         let effects = pendingEffects
         let intrinsics = capturedIntrinsics
         let cameraTransform = capturedCameraTransform
-        let fusion = depthResult
-        let imgW = Float(imageWidth)
 
         // Release heavy resources immediately
         pendingEffects.removeAll()
         capturedCIImage = nil
         capturedIntrinsics = nil
         capturedCameraTransform = nil
+        depthResult = nil
+        depthSamples = []
 
         guard !effects.isEmpty,
               let sceneView,
               let intrinsics,
-              let cameraTransform,
-              let fusion else { return }
+              let cameraTransform else { return }
 
         // simd_float3x3 is column-major: matrix[column][row]
         let fx = intrinsics[0][0]  // column 0, row 0
@@ -332,8 +339,9 @@ struct ContentView: View {
         let cx = intrinsics[2][0]  // column 2, row 0 (principal point x)
         let cy = intrinsics[2][1]  // column 2, row 1 (principal point y)
 
-        for (type, detection) in effects {
-            guard let depth = fusion.sampleDepth(at: detection.centroid) else { continue }
+        for (type, detection, depthSample) in effects {
+            // Use the pre-computed depth sample — same value the user saw on screen.
+            let depth = depthSample.depth
 
             // Inline world position computation (avoids needing ARFrame)
             let x = (Float(detection.centroid.x) - cx) / fx * depth
@@ -346,8 +354,7 @@ struct ContentView: View {
             let scale = calculateEffectScale(
                 boundingBox: detection.boundingBox,
                 depth: depth,
-                intrinsics: intrinsics,
-                imageWidth: imgW
+                intrinsics: intrinsics
             )
 
             effectManager.placeEffect(

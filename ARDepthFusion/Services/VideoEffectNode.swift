@@ -1,12 +1,20 @@
-import SceneKit
+@preconcurrency import SceneKit
 import AVFoundation
 import Metal
 import CoreVideo
 
-class VideoEffectNode: SCNNode {
+/// A SceneKit node that renders video frames as Metal textures onto a billboard plane.
+///
+/// IMPORTANT: This class MUST be `nonisolated` because SceneKit accesses SCNNode
+/// subclasses from its internal rendering thread. With the project-wide
+/// `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` setting, omitting `nonisolated`
+/// would make this class implicitly @MainActor-isolated, causing Timer/CADisplayLink
+/// callbacks to silently fail (the `[weak self]` resolves to nil due to actor
+/// isolation conflicts with SceneKit's non-main-thread ownership).
+nonisolated class VideoEffectNode: SCNNode, @unchecked Sendable {
     private var player: AVPlayer?
     private var videoOutput: AVPlayerItemVideoOutput?
-    private var displayLink: CADisplayLink?
+    private var updateTimer: Timer?
     private var textureCache: CVMetalTextureCache?
     private var currentTexture: CVMetalTexture?
     private var loopObserver: NSObjectProtocol?
@@ -54,23 +62,32 @@ class VideoEffectNode: SCNNode {
         billboard.freeAxes = [.Y]
         self.constraints = [billboard]
 
-        // Display link for per-frame texture updates
-        let link = CADisplayLink(target: self, selector: #selector(updateFrame))
-        link.add(to: .main, forMode: .common)
-        displayLink = link
+        // Schedule timer on the main thread explicitly.
+        // Block-based Timer avoids @MainActor + @objc selector dispatch issues
+        // that break CADisplayLink on newer Swift runtimes.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+                self?.updateFrame()
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            self.updateTimer = timer
+        }
 
         // Player was prerolled — start immediately
         player.play()
     }
 
-    @objc private func updateFrame() {
+    private func updateFrame() {
         guard let output = videoOutput,
               let currentItem = player?.currentItem,
               let textureCache else { return }
 
         let time = currentItem.currentTime()
         guard output.hasNewPixelBuffer(forItemTime: time),
-              let pixelBuffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) else { return }
+              let pixelBuffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) else {
+            return
+        }
 
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
@@ -91,18 +108,22 @@ class VideoEffectNode: SCNNode {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    /// Safety net: if SceneKit removes the node (e.g. session reset), ensure
-    /// the CADisplayLink is invalidated to break the retain cycle.
+    /// When removed from scene, clean up resources.
+    /// Only call stop() if the node is actually in a scene (has a parent).
+    /// SceneKit's addChildNode() may internally call removeFromParentNode()
+    /// on the node before attaching it, which would incorrectly trigger stop().
     override func removeFromParentNode() {
-        stop()
+        if parent != nil {
+            stop()
+        }
         super.removeFromParentNode()
     }
 
     func stop() {
         guard !stopped else { return }
         stopped = true
-        displayLink?.invalidate()
-        displayLink = nil
+        updateTimer?.invalidate()
+        updateTimer = nil
         if let observer = loopObserver {
             NotificationCenter.default.removeObserver(observer)
             loopObserver = nil
@@ -112,5 +133,13 @@ class VideoEffectNode: SCNNode {
         videoOutput = nil
         currentTexture = nil
         // textureCache is shared — don't nil it, EffectManager owns it
+    }
+
+    deinit {
+        updateTimer?.invalidate()
+        if let observer = loopObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        player?.pause()
     }
 }

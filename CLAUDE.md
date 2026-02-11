@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-A real-time AR iOS app that detects objects and places 3D USDZ animation effects at their world positions. Uses LiDAR + Depth Anything fusion for accurate depth estimation.
+A real-time AR iOS app that detects objects and places pre-rendered video effects at their world positions. Uses LiDAR + Depth Anything fusion for accurate depth estimation.
 
 ### Core Workflow
 1. User opens app → loading screen while ML models preload → live AR camera view
@@ -22,7 +22,7 @@ A real-time AR iOS app that detects objects and places 3D USDZ animation effects
 | Requirement | Decision |
 |-------------|----------|
 | App Type | Real-time AR (live rendering) |
-| Output | USDZ 3D animations rendered in AR view |
+| Output | Pre-rendered video effects (.mov HEVC+alpha) on billboard planes in AR view |
 | Orientation | Portrait only |
 | Non-LiDAR devices | Not supported (App Store filters via `UIRequiredDeviceCapabilities`) |
 | Effect size | Scaled based on bounding box size |
@@ -35,8 +35,8 @@ A real-time AR iOS app that detects objects and places 3D USDZ animation effects
 | Effect management | Can delete individual effects |
 | Save feature | Not needed |
 | Object detection | **Integrated YOLO source** (yolo11l-seg with segmentation masks) |
-| Confidence threshold | 0.7 |
-| Effect types | Flamethrower, Explosion, Lightning, Dragon Breath, Smoke, Debug Cube (6 types) |
+| Confidence threshold | 0.65 |
+| Effect types | Explosion, Fireball, Flamethrower, Smoke, Lightning, Magic, Debug Cube (7 types) |
 | UI Language | English |
 | ML Compute Units | **CPU + Neural Engine only** (GPU reserved for SceneKit rendering) |
 
@@ -46,7 +46,7 @@ A real-time AR iOS app that detects objects and places 3D USDZ animation effects
 
 - **Language**: Swift 5.9+
 - **UI**: SwiftUI
-- **AR Framework**: SceneKit (`ARSCNView`) + USDZ animations
+- **AR Framework**: SceneKit (`ARSCNView`) + video effects (.mov HEVC with alpha)
 - **Object Detection**: Integrated YOLO source (yolo11l-seg, with segmentation masks)
 - **Depth Estimation**: CoreML (Depth Anything V2 Small F16)
 - **Depth Source**: ARKit LiDAR (`ARFrame.sceneDepth`)
@@ -66,13 +66,14 @@ ARDepthFusion/
 │   ├── DetectedObject.swift             # Detection result (bbox, class, mask, centroid)
 │   ├── DepthFusionResult.swift          # Fused depth map model
 │   ├── PlacedEffect.swift               # Placed effect tracking (SCNNode)
-│   └── EffectType.swift                 # Effect type enum (6 types incl. debugCube)
+│   └── EffectType.swift                 # Effect type enum (7 types incl. debugCube)
 │
 ├── Services/
 │   ├── ObjectDetectionService.swift     # YOLO wrapper (C ABI bridge)
 │   ├── DepthEstimator.swift             # Depth Anything CoreML inference
 │   ├── DepthFusion.swift                # LiDAR + Depth Anything fusion
-│   └── EffectManager.swift              # Manage placed effects (USDZ + debug cube)
+│   ├── EffectManager.swift              # Manage placed effects (video + debug cube)
+│   └── VideoEffectNode.swift            # SCNNode subclass: AVPlayer + Metal texture billboard
 │
 ├── Views/
 │   ├── ARContainerView.swift            # SceneKit ARSCNView wrapper
@@ -116,7 +117,7 @@ config.computeUnits = .cpuAndNeuralEngine  // NOT .all, NOT .cpuAndGPU
 
 YOLO is integrated via source code in `ARDepthFusion/YOLO/` with a C ABI bridge to `YOLOUnity.framework`:
 - Model: `yolo11l-seg` (segmentation variant with instance masks)
-- Confidence threshold: 0.7, IOU threshold: 0.5
+- Confidence threshold: 0.65, IOU threshold: 0.5
 - Returns per-detection: bounding box, class, confidence, centroid, segmentation mask
 - Masks are smooth sigmoid values [0,1] at proto resolution (160x120), cropped to bbox
 - Model files use hyphens (`yolo11l-seg`), but API expects underscores (`yolo11l_seg`)
@@ -274,7 +275,7 @@ class DepthFusion {
 
 ```swift
 let sceneView = ARSCNView(frame: .zero)
-sceneView.autoenablesDefaultLighting = true  // USDZ model illumination
+sceneView.autoenablesDefaultLighting = true
 
 let config = ARWorldTrackingConfiguration()
 config.frameSemantics.insert(.sceneDepth)
@@ -282,15 +283,39 @@ config.planeDetection = [.horizontal, .vertical]
 sceneView.session.run(config)
 ```
 
-### 5. USDZ Effects (SceneKit)
+### 5. Video Effects (SceneKit)
 
-6 effect types: flamethrower, explosion, lightning, dragonBreath, smoke, debugCube.
+7 effect types: explosion, fireball, flamethrower, smoke, lightning, magic, debugCube.
 
-- USDZ files are loaded via `SCNScene(url:)`, children cloned and added to scene
-- Animations are played recursively with `repeatCount = .infinity`
-- Missing USDZ files are handled gracefully (print warning, no crash)
+- Pre-rendered .mov videos (HEVC with alpha) rendered on `SCNPlane` billboards
+- `AVPlayerItemVideoOutput` + `CVMetalTextureCache` pipeline for per-frame texture updates
+- `Timer` (block API) scheduled via `DispatchQueue.main.async` for 60fps frame polling
+- Players prerolled at launch (pool of 2 per type), auto-replenished on consumption
+- Preroll requires `waitForReadyAndPreroll()` — KVO wait for `.readyToPlay` before calling `preroll(atRate:)`
+- Looping via `AVPlayerItemDidPlayToEndTime` notification + seek-to-zero
+- `SCNBillboardConstraint` with `freeAxes = [.Y]` (upright, faces camera horizontally)
+- Shared `CVMetalTextureCache` across all nodes (owned by EffectManager, flushed on clearAll)
 - `debugCube` places a 10cm red `SCNBox` (for position verification)
-- Effects are `SCNNode`-based, removed via `removeFromParentNode()`
+- Effects are `SCNNode`-based, removed via `removeFromParentNode()` (triggers `stop()`)
+- Depth for placement uses pre-computed `DepthSample` (same value user sees on detection screen)
+
+### 5b. VideoEffectNode Actor Isolation (CRITICAL)
+
+**`VideoEffectNode` MUST be `nonisolated`** because SceneKit accesses `SCNNode` subclasses
+from its internal rendering thread. With `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, omitting
+`nonisolated` makes the class implicitly `@MainActor`-isolated, causing:
+- Timer/CADisplayLink callbacks silently fail (`[weak self]` resolves to nil)
+- `@MainActor @objc` methods incompatible with ObjC selector dispatch
+
+```swift
+@preconcurrency import SceneKit  // Suppress concurrency warnings for SceneKit types
+
+nonisolated class VideoEffectNode: SCNNode, @unchecked Sendable {
+    // Timer scheduled via DispatchQueue.main.async (not in init directly)
+    // removeFromParentNode() override guarded with `if parent != nil`
+    //   (SceneKit's addChildNode() internally calls removeFromParentNode())
+}
+```
 
 ### 6. 2D → 3D Unprojection
 
@@ -323,21 +348,14 @@ let worldPoint = cameraTransform * cameraPoint
 
 ```swift
 func calculateEffectScale(
-    boundingBox: CGRect,      // Normalized 0-1
+    boundingBox: CGRect,      // Pixel coordinates (not normalized)
     depth: Float,             // Meters
-    intrinsics: simd_float3x3,
-    imageWidth: Float = 1920
+    intrinsics: simd_float3x3
 ) -> Float {
-    let fx = intrinsics[0, 0]
-    let pixelWidth = Float(boundingBox.width) * imageWidth
-    let realWidth = (pixelWidth * depth) / fx
-    return realWidth.clamped(to: 0.1...3.0)
-}
-
-extension Comparable {
-    func clamped(to range: ClosedRange<Self>) -> Self {
-        return min(max(self, range.lowerBound), range.upperBound)
-    }
+    let fx = intrinsics[0][0]
+    let bboxWidthPixels = Float(boundingBox.width)
+    let worldWidth = bboxWidthPixels * depth / fx
+    return min(max(worldWidth, 0.1), 3.0)
 }
 ```
 
@@ -411,13 +429,13 @@ extension Comparable {
          │  2. Unproject centroid → 3D     │
          │  3. Calculate scale from bbox   │
          │  4. EffectManager.placeEffect() │
-         │     (USDZ load + animate)       │
+         │     (video effect placement)    │
          └─────────────────────────────────┘
                           │
                           ▼
          ┌─────────────────────────────────┐
          │  Back to Live AR View           │
-         │  USDZ effects anchored in world │
+         │  Video effects anchored in world│
          └─────────────────────────────────┘
 ```
 
@@ -508,7 +526,7 @@ huggingface-cli download \
 ### ⚠️ YOLO Integration
 - Model: `yolo11l-seg` (segmentation with instance masks)
 - C ABI bridge via `YOLOUnity.framework` + Swift source in `YOLO/`
-- Confidence threshold: 0.7, IOU: 0.5
+- Confidence threshold: 0.65, IOU: 0.5
 - Masks: smooth sigmoid [0,1] at proto resolution (160x120), cropped to bbox
 - Model file uses hyphens (`yolo11l-seg`), API expects underscores (`yolo11l_seg`)
 
@@ -524,7 +542,7 @@ config.computeUnits = .all
 ### ⚠️ iOS 16 Minimum
 - Uses `ObservableObject` + `@StateObject` (not `@Observable` which requires iOS 17)
 - Uses `ARSCNView` (SceneKit, available since iOS 11)
-- USDZ loading via `SCNScene(url:)` (available since iOS 12)
+- AVFoundation video playback (available since iOS 4)
 
 ### ⚠️ Coordinate Systems
 
@@ -566,8 +584,8 @@ func landscapeToPortrait(_ rect: CGRect) -> CGRect {
 - [ ] Distance labels show correct depth values
 - [ ] Tapping object shows effect picker
 - [ ] Debug cube placed at correct 3D world position
-- [ ] USDZ effects load, animate, and position correctly (when files present)
-- [ ] Missing USDZ files handled gracefully (warning, no crash)
+- [ ] Video effects load, loop, and position correctly (when .mov files present)
+- [ ] Missing .mov files handled gracefully (effect not shown in picker)
 - [ ] Effect scale matches object size
 - [ ] Multiple effects on different objects
 - [ ] Delete individual effects works
