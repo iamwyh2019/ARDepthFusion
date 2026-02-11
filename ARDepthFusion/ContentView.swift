@@ -1,20 +1,21 @@
 import SwiftUI
-import RealityKit
+import SceneKit
 import ARKit
 import CoreImage
 import CoreVideo
 
 struct ContentView: View {
-    @State private var coordinator = ARSessionCoordinator()
-    @State private var arView: ARView?
+    @StateObject private var coordinator = ARSessionCoordinator()
+    @State private var sceneView: ARSCNView?
     @State private var detections: [DetectedObject] = []
     @State private var depthResult: DepthFusionResult?
     @State private var isDetecting = false
     @State private var statusText = "Ready"
     @State private var imageWidth: CGFloat = 1920
     @State private var imageHeight: CGFloat = 1440
-    @State private var effectManager = EffectManager()
+    @StateObject private var effectManager = EffectManager()
     @State private var modelsLoaded = false
+    @State private var modelLoadError: String?
 
     // Detection results screen state
     @State private var showDetectionResults = false
@@ -23,13 +24,16 @@ struct ContentView: View {
     @State private var capturedCameraTransform: simd_float4x4?
     @State private var detectionElapsedMs: Double = 0
 
+    // Per-detection depth samples (LiDAR-preferred, fused fallback)
+    @State private var depthSamples: [DepthSample?] = []
+
     // Queued effects (placed after dismissing results screen)
-    @State private var pendingEffects: [(type: ParticleEffectType, detection: DetectedObject)] = []
+    @State private var pendingEffects: [(type: EffectType, detection: DetectedObject)] = []
 
     var body: some View {
         ZStack {
             ARContainerView(coordinator: coordinator) { view in
-                arView = view
+                sceneView = view
             }
             .ignoresSafeArea()
 
@@ -54,7 +58,7 @@ struct ContentView: View {
                 Spacer()
 
                 if !effectManager.placedEffects.isEmpty {
-                    EffectListView(effectManager: effectManager, arView: arView)
+                    EffectListView(effectManager: effectManager)
                 }
 
                 ControlPanelView(
@@ -64,11 +68,10 @@ struct ContentView: View {
                     effectCount: effectManager.placedEffects.count,
                     onDetect: { runDetection() },
                     onClearAll: {
-                        if let arView {
-                            effectManager.clearAll(from: arView)
-                        }
+                        effectManager.clearAll()
                         detections = []
                         depthResult = nil
+                        depthSamples = []
                         statusText = "Cleared"
                     }
                 )
@@ -80,7 +83,7 @@ struct ContentView: View {
                     Color.black.ignoresSafeArea()
                     VStack(spacing: 16) {
                         ProgressView()
-                            .controlSize(.large)
+                            .scaleEffect(1.5)
                             .tint(.white)
                         Text("Loading models...")
                             .foregroundStyle(.white)
@@ -90,10 +93,22 @@ struct ContentView: View {
             }
         }
         .task {
-            async let yolo: Void = ObjectDetectionService.shared.initialize()
+            async let yoloError = ObjectDetectionService.shared.initialize()
             async let depth: Void = DepthEstimator.preload()
-            _ = await (yolo, depth)
+            let error = await yoloError
+            _ = await depth
             modelsLoaded = true
+            if let error {
+                modelLoadError = error
+            }
+        }
+        .alert("Model Loading Error", isPresented: Binding(
+            get: { modelLoadError != nil },
+            set: { if !$0 { modelLoadError = nil } }
+        )) {
+            Button("OK") { modelLoadError = nil }
+        } message: {
+            Text(modelLoadError ?? "")
         }
         .fullScreenCover(isPresented: $showDetectionResults, onDismiss: processPendingEffects) {
             if let ciImage = capturedCIImage {
@@ -103,6 +118,7 @@ struct ContentView: View {
                     imageWidth: imageWidth,
                     imageHeight: imageHeight,
                     elapsedMs: detectionElapsedMs,
+                    depthSamples: depthSamples,
                     onPlaceEffect: { type, detection in
                         pendingEffects.append((type: type, detection: detection))
                     }
@@ -155,8 +171,20 @@ struct ContentView: View {
 
             let elapsed = CFAbsoluteTimeGetCurrent() - start
 
+            // Compute per-detection depth: prefer LiDAR, fall back to fused
+            let imgW = Int(imageWidth)
+            let imgH = Int(imageHeight)
+            var samples: [DepthSample?] = []
+            for obj in objects {
+                let sample = sampleDepth(at: obj.centroid, from: frame,
+                                         fusionResult: fusionResult,
+                                         imageWidth: imgW, imageHeight: imgH)
+                samples.append(sample)
+            }
+
             detections = objects
             depthResult = fusionResult
+            depthSamples = samples
             detectionElapsedMs = elapsed * 1000
             isDetecting = false
 
@@ -173,17 +201,78 @@ struct ContentView: View {
 
             if let fusion = fusionResult {
                 print("Fusion alpha=\(fusion.alpha) beta=\(fusion.beta) pairs=\(fusion.validPairCount)")
-                for obj in objects {
-                    let depth = fusion.sampleDepth(at: obj.centroid)
-                    print("  \(obj.className): depth=\(String(format: "%.2f", depth ?? -1))m")
-                }
+            }
+            for (i, obj) in objects.enumerated() {
+                let s = samples[i]
+                let src = s?.isLiDAR == true ? "LiDAR" : "fused"
+                print("  \(obj.className): depth=\(String(format: "%.2f", s?.depth ?? -1))m (\(src))")
             }
         }
     }
 
+    /// Sample depth at a point: prefer high-confidence LiDAR, fall back to fused depth.
+    private func sampleDepth(
+        at point: CGPoint,
+        from frame: ARFrame,
+        fusionResult: DepthFusionResult?,
+        imageWidth: Int,
+        imageHeight: Int
+    ) -> DepthSample? {
+        let (lidarDepth, confidence) = sampleLiDAR(at: point, from: frame,
+                                                    imageWidth: imageWidth,
+                                                    imageHeight: imageHeight)
+        if let depth = lidarDepth,
+           confidence >= 2,
+           depth > 0.1 && depth < 5.0 && depth.isFinite {
+            return DepthSample(depth: depth, isLiDAR: true)
+        }
+        if let depth = fusionResult?.sampleDepth(at: point) {
+            return DepthSample(depth: depth, isLiDAR: false)
+        }
+        return nil
+    }
+
+    /// Sample LiDAR depth map at a camera-image-space point.
+    private func sampleLiDAR(
+        at imagePoint: CGPoint,
+        from frame: ARFrame,
+        imageWidth: Int,
+        imageHeight: Int
+    ) -> (depth: Float?, confidence: UInt8) {
+        guard let sceneDepth = frame.sceneDepth else { return (nil, 0) }
+
+        let depthMap = sceneDepth.depthMap
+        let lidarW = CVPixelBufferGetWidth(depthMap)
+        let lidarH = CVPixelBufferGetHeight(depthMap)
+
+        let normX = Float(imagePoint.x) / Float(imageWidth)
+        let normY = Float(imagePoint.y) / Float(imageHeight)
+        let lx = min(Int(normX * Float(lidarW)), lidarW - 1)
+        let ly = min(Int(normY * Float(lidarH)), lidarH - 1)
+
+        guard lx >= 0, ly >= 0 else { return (nil, 0) }
+
+        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
+
+        guard let depthPtr = CVPixelBufferGetBaseAddress(depthMap)?
+                .assumingMemoryBound(to: Float32.self) else { return (nil, 0) }
+        let depth = depthPtr[ly * lidarW + lx]
+
+        var confidence: UInt8 = 0
+        if let confMap = sceneDepth.confidenceMap {
+            CVPixelBufferLockBaseAddress(confMap, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(confMap, .readOnly) }
+            if let confPtr = CVPixelBufferGetBaseAddress(confMap)?
+                    .assumingMemoryBound(to: UInt8.self) {
+                confidence = confPtr[ly * lidarW + lx]
+            }
+        }
+
+        return (depth, confidence)
+    }
+
     /// Place all queued effects after the detection results screen is dismissed.
-    /// Anchors are placed immediately; particle emitters are deferred by EffectManager
-    /// to avoid Metal stencil errors while RealityKit's transparent render pass initializes.
     private func processPendingEffects() {
         let effects = pendingEffects
         let intrinsics = capturedIntrinsics
@@ -198,7 +287,7 @@ struct ContentView: View {
         capturedCameraTransform = nil
 
         guard !effects.isEmpty,
-              let arView,
+              let sceneView,
               let intrinsics,
               let cameraTransform,
               let fusion else { return }
@@ -232,7 +321,7 @@ struct ContentView: View {
                 objectClass: detection.className,
                 at: worldPos,
                 scale: scale,
-                in: arView
+                in: sceneView
             )
 
             statusText = "\(type.displayName) placed on \(detection.className)"

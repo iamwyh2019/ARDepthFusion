@@ -1,9 +1,7 @@
 import SwiftUI
-import RealityKit
 
 struct EffectListView: View {
-    var effectManager: EffectManager
-    let arView: ARView?
+    @ObservedObject var effectManager: EffectManager
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -16,9 +14,7 @@ struct EffectListView: View {
                             .font(.caption2)
                             .lineLimit(1)
                         Button {
-                            if let arView {
-                                effectManager.removeEffect(effect, from: arView)
-                            }
+                            effectManager.removeEffect(effect)
                         } label: {
                             Image(systemName: "xmark.circle.fill")
                                 .font(.caption)

@@ -1,6 +1,11 @@
 import CoreML
 import Foundation
 
+struct DepthSample {
+    let depth: Float
+    let isLiDAR: Bool
+}
+
 struct DepthFusionResult {
     let depthMap: [Float]
     let width: Int

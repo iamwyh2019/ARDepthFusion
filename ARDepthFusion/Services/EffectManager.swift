@@ -1,154 +1,81 @@
-import RealityKit
-import UIKit
-import Observation
+import SceneKit
+import ARKit
+import Combine
 
-@Observable
-final class EffectManager {
-    var placedEffects: [PlacedEffect] = []
+final class EffectManager: ObservableObject {
+    @Published var placedEffects: [PlacedEffect] = []
 
     func placeEffect(
-        type: ParticleEffectType,
+        type: EffectType,
         objectClass: String,
         at position: SIMD3<Float>,
         scale: Float,
-        in arView: ARView
+        in sceneView: ARSCNView
     ) {
-        let anchor = AnchorEntity(world: position)
+        let rootNode = SCNNode()
+        rootNode.position = SCNVector3(position.x, position.y, position.z)
 
         if type == .debugCube {
-            // 10cm × 10cm × 10cm cube with bright red material
-            let mesh = MeshResource.generateBox(size: 0.1)
-            var material = SimpleMaterial()
-            material.color = .init(tint: .red)
-            let cube = ModelEntity(mesh: mesh, materials: [material])
-            anchor.addChild(cube)
-        } else {
-            let entity = ModelEntity()
-            let emitter = configureEmitter(for: type, scale: scale)
-            entity.components.set(emitter)
-            anchor.addChild(entity)
+            let box = SCNBox(width: 0.1, height: 0.1, length: 0.1, chamferRadius: 0)
+            let material = SCNMaterial()
+            material.diffuse.contents = UIColor.red
+            box.materials = [material]
+            let cubeNode = SCNNode(geometry: box)
+            rootNode.addChildNode(cubeNode)
+        } else if let fileName = type.usdzFileName {
+            guard let url = Bundle.main.url(forResource: fileName, withExtension: "usdz") else {
+                print("[EffectManager] USDZ file not found: \(fileName).usdz — skipping effect")
+                return
+            }
+            do {
+                let usdzScene = try SCNScene(url: url, options: [
+                    .checkConsistency: true
+                ])
+                // Clone all children from the USDZ scene into our root node
+                for child in usdzScene.rootNode.childNodes {
+                    let clone = child.clone()
+                    clone.scale = SCNVector3(scale, scale, scale)
+                    rootNode.addChildNode(clone)
+                    playAnimations(on: clone)
+                }
+            } catch {
+                print("[EffectManager] Failed to load USDZ \(fileName): \(error.localizedDescription)")
+                return
+            }
         }
 
-        arView.scene.addAnchor(anchor)
+        sceneView.scene.rootNode.addChildNode(rootNode)
 
         let effect = PlacedEffect(
             type: type,
             objectClass: objectClass,
-            anchor: anchor
+            node: rootNode
         )
         placedEffects.append(effect)
     }
 
-    func removeEffect(_ effect: PlacedEffect, from arView: ARView) {
-        effect.anchor.removeFromParent()
+    func removeEffect(_ effect: PlacedEffect) {
+        effect.node.removeFromParentNode()
         placedEffects.removeAll { $0.id == effect.id }
     }
 
-    func clearAll(from arView: ARView) {
+    func clearAll() {
         for effect in placedEffects {
-            effect.anchor.removeFromParent()
+            effect.node.removeFromParentNode()
         }
         placedEffects.removeAll()
     }
 
-    private func configureEmitter(
-        for type: ParticleEffectType,
-        scale: Float
-    ) -> ParticleEmitterComponent {
-        var emitter = ParticleEmitterComponent()
-        let s = scale
-
-        switch type {
-        case .fire:
-            emitter.emitterShape = .cone
-            emitter.emitterShapeSize = SIMD3<Float>(s * 0.3, s * 0.5, s * 0.3)
-            emitter.mainEmitter.birthRate = 200
-            emitter.mainEmitter.lifeSpan = 0.8
-            emitter.speed = 0.3
-            emitter.mainEmitter.size = 0.03 * s
-            emitter.mainEmitter.color = .evolving(
-                start: .single(.init(red: 1.0, green: 0.9, blue: 0.2, alpha: 1.0)),
-                end: .single(.init(red: 1.0, green: 0.2, blue: 0.0, alpha: 0.0))
-            )
-            emitter.birthDirection = .normal
-
-        case .smoke:
-            emitter.emitterShape = .sphere
-            emitter.emitterShapeSize = SIMD3<Float>(s * 0.4, s * 0.4, s * 0.4)
-            emitter.mainEmitter.birthRate = 80
-            emitter.mainEmitter.lifeSpan = 2.0
-            emitter.speed = 0.1
-            emitter.mainEmitter.size = 0.05 * s
-            emitter.mainEmitter.color = .evolving(
-                start: .single(.init(red: 0.5, green: 0.5, blue: 0.5, alpha: 0.6)),
-                end: .single(.init(red: 0.7, green: 0.7, blue: 0.7, alpha: 0.0))
-            )
-
-        case .sparks:
-            emitter.emitterShape = .point
-            emitter.mainEmitter.birthRate = 150
-            emitter.mainEmitter.lifeSpan = 0.5
-            emitter.speed = 2.0
-            emitter.mainEmitter.size = 0.01 * s
-            emitter.mainEmitter.color = .evolving(
-                start: .single(.init(red: 1.0, green: 1.0, blue: 0.8, alpha: 1.0)),
-                end: .single(.init(red: 1.0, green: 0.6, blue: 0.0, alpha: 0.0))
-            )
-
-        case .rain:
-            emitter.emitterShape = .plane
-            emitter.emitterShapeSize = SIMD3<Float>(s * 1.0, 0, s * 1.0)
-            emitter.mainEmitter.birthRate = 300
-            emitter.mainEmitter.lifeSpan = 1.5
-            emitter.speed = 3.0
-            emitter.mainEmitter.size = 0.005 * s
-            emitter.mainEmitter.color = .constant(.single(.init(
-                red: 0.7, green: 0.85, blue: 1.0, alpha: 0.6
-            )))
-            emitter.birthDirection = .world
-            emitter.emissionDirection = SIMD3<Float>(0, -1, 0)
-
-        case .snow:
-            emitter.emitterShape = .plane
-            emitter.emitterShapeSize = SIMD3<Float>(s * 1.0, 0, s * 1.0)
-            emitter.mainEmitter.birthRate = 100
-            emitter.mainEmitter.lifeSpan = 3.0
-            emitter.speed = 0.3
-            emitter.mainEmitter.size = 0.015 * s
-            emitter.mainEmitter.color = .constant(.single(.init(
-                red: 1.0, green: 1.0, blue: 1.0, alpha: 0.9
-            )))
-            emitter.birthDirection = .world
-            emitter.emissionDirection = SIMD3<Float>(0, -1, 0)
-
-        case .magic:
-            emitter.emitterShape = .sphere
-            emitter.emitterShapeSize = SIMD3<Float>(s * 0.5, s * 0.5, s * 0.5)
-            emitter.mainEmitter.birthRate = 50
-            emitter.mainEmitter.lifeSpan = 1.5
-            emitter.speed = 0.5
-            emitter.mainEmitter.size = 0.02 * s
-            emitter.mainEmitter.color = .evolving(
-                start: .single(.init(red: 0.6, green: 0.2, blue: 1.0, alpha: 1.0)),
-                end: .single(.init(red: 0.0, green: 0.8, blue: 1.0, alpha: 0.0))
-            )
-
-        case .impact:
-            emitter.emitterShape = .sphere
-            emitter.emitterShapeSize = SIMD3<Float>(s * 0.1, s * 0.1, s * 0.1)
-            emitter.mainEmitter.birthRate = 500
-            emitter.mainEmitter.lifeSpan = 0.4
-            emitter.speed = 3.0
-            emitter.mainEmitter.size = 0.015 * s
-            emitter.mainEmitter.color = .evolving(
-                start: .single(.init(red: 1.0, green: 0.5, blue: 0.0, alpha: 1.0)),
-                end: .single(.init(red: 1.0, green: 0.1, blue: 0.0, alpha: 0.0))
-            )
-
-        case .debugCube:
-            break // handled separately in placeEffect
+    /// Recursively play all animations on a node and its children, looping infinitely.
+    private func playAnimations(on node: SCNNode) {
+        for key in node.animationKeys {
+            if let player = node.animationPlayer(forKey: key) {
+                player.animation.repeatCount = .infinity
+                player.play()
+            }
         }
-
-        return emitter
+        for child in node.childNodes {
+            playAnimations(on: child)
+        }
     }
 }

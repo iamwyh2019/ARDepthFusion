@@ -1,13 +1,14 @@
 import SwiftUI
-import RealityKit
+import SceneKit
 import ARKit
 
 struct ARContainerView: UIViewRepresentable {
     let coordinator: ARSessionCoordinator
-    let arViewRef: (ARView) -> Void
+    let sceneViewRef: (ARSCNView) -> Void
 
-    func makeUIView(context: Context) -> ARView {
-        let arView = ARView(frame: .zero)
+    func makeUIView(context: Context) -> ARSCNView {
+        let sceneView = ARSCNView(frame: .zero)
+        sceneView.autoenablesDefaultLighting = true
 
         let config = ARWorldTrackingConfiguration()
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
@@ -15,15 +16,12 @@ struct ARContainerView: UIViewRepresentable {
         }
         config.planeDetection = [.horizontal, .vertical]
 
-        // Note: .occlusion is intentionally NOT enabled — it creates a stencil buffer
-        // that conflicts with ParticleEmitterComponent's transparent render pass,
-        // causing Metal validation assertions. Depth is still available via sceneDepth.
-        arView.session.delegate = coordinator
-        arView.session.run(config)
+        sceneView.session.delegate = coordinator
+        sceneView.session.run(config)
 
-        DispatchQueue.main.async { arViewRef(arView) }
-        return arView
+        DispatchQueue.main.async { sceneViewRef(sceneView) }
+        return sceneView
     }
 
-    func updateUIView(_ uiView: ARView, context: Context) {}
+    func updateUIView(_ uiView: ARSCNView, context: Context) {}
 }

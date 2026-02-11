@@ -1,16 +1,16 @@
 import CoreML
-import Vision
+@preconcurrency import Vision
 import UIKit
 import Accelerate
 
 class YOLOPredictor: @unchecked Sendable {
-    nonisolated let model: MLModel
-    nonisolated let detector: VNCoreMLModel
-    nonisolated let confidenceThreshold: Float
-    nonisolated let iouThreshold: Float
-    nonisolated let modelWidth: Int
-    nonisolated let modelHeight: Int
-    nonisolated let classNames: [Int: String]
+    nonisolated(unsafe) let model: MLModel
+    nonisolated(unsafe) let detector: VNCoreMLModel
+    let confidenceThreshold: Float
+    let iouThreshold: Float
+    let modelWidth: Int
+    let modelHeight: Int
+    let classNames: [Int: String]
     nonisolated(unsafe) var visionRequest: YOLORequest!
 
     nonisolated init?(
@@ -22,15 +22,17 @@ class YOLOPredictor: @unchecked Sendable {
         let config = MLModelConfiguration()
         config.computeUnits = .cpuAndNeuralEngine
 
-        guard let model: MLModel = {
-            switch modelName {
-            case "yolo11l_seg":
-                return try? yolo11l_seg(configuration: config).model
-            default:
-                NSLog("Error: Unknown model name '\(modelName)'.")
-                return nil
-            }
-        }() else {
+        // Load model via compiled URL to avoid @MainActor generated class
+        guard let modelURL = Bundle.main.url(forResource: modelName, withExtension: "mlmodelc") else {
+            NSLog("Error: Could not find compiled model '\(modelName).mlmodelc' in bundle at \(Bundle.main.bundlePath)")
+            return nil
+        }
+
+        let model: MLModel
+        do {
+            model = try MLModel(contentsOf: modelURL, configuration: config)
+        } catch {
+            NSLog("Error: Found model at \(modelURL.path) but failed to load it: \(error.localizedDescription)")
             return nil
         }
 
@@ -48,7 +50,7 @@ class YOLOPredictor: @unchecked Sendable {
         (self.modelWidth, self.modelHeight, self.classNames) = parseModelSizeAndNames(model: model)
 
         let request = YOLORequest(
-            model: detector,
+            coreMLModel: detector,
             completionHandler: { [weak self] request, error in
                 self?.processObservations(for: request, error: error)
         })
@@ -102,6 +104,7 @@ class YOLOPredictor: @unchecked Sendable {
     }
 
     nonisolated func processObservations(for request: VNRequest, error: Error?) {
+        nonisolated(unsafe) let request = request
         DispatchQueue.global(qos: .userInitiated).async {
             autoreleasepool {
                 if let error = error {
@@ -224,18 +227,20 @@ class YOLOPredictor: @unchecked Sendable {
 }
 
 
-class ThresholdProvider: MLFeatureProvider, @unchecked Sendable {
-    var values: [String: MLFeatureValue]
-
-    var featureNames: Set<String> {
-        return Set(values.keys)
-    }
+class ThresholdProvider: @unchecked Sendable {
+    nonisolated(unsafe) var values: [String: MLFeatureValue]
 
     nonisolated init(iouThreshold: Double = 0.45, confidenceThreshold: Double = 0.25) {
         values = [
             "iouThreshold": MLFeatureValue(double: iouThreshold),
             "confidenceThreshold": MLFeatureValue(double: confidenceThreshold),
         ]
+    }
+}
+
+extension ThresholdProvider: MLFeatureProvider {
+    nonisolated var featureNames: Set<String> {
+        return Set(values.keys)
     }
 
     nonisolated func featureValue(for featureName: String) -> MLFeatureValue? {
@@ -245,5 +250,12 @@ class ThresholdProvider: MLFeatureProvider, @unchecked Sendable {
 
 
 class YOLORequest: VNCoreMLRequest, @unchecked Sendable {
-    var userData: [String: Any] = [:]
+    nonisolated(unsafe) var userData: [String: Any] = [:]
+
+    nonisolated init(coreMLModel model: VNCoreMLModel, completionHandler: @escaping @Sendable (VNRequest, (any Error)?) -> Void) {
+        super.init(model: model, completionHandler: completionHandler)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
 }

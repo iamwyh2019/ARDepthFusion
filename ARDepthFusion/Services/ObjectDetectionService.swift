@@ -1,4 +1,5 @@
 import ARKit
+import Combine
 
 nonisolated private func yoloResultHandler(_ result: YOLODetectionResult) {
     let objects = result.detections.map { det in
@@ -21,22 +22,22 @@ nonisolated private func yoloResultHandler(_ result: YOLODetectionResult) {
     ObjectDetectionService.shared.deliverResults(objects)
 }
 
-@Observable
-final class ObjectDetectionService: @unchecked Sendable {
+final class ObjectDetectionService: ObservableObject, @unchecked Sendable {
     nonisolated static let shared = ObjectDetectionService()
 
     private var isInitialized = false
     private let lock = NSLock()
-    @ObservationIgnored private nonisolated(unsafe) var pendingContinuation: CheckedContinuation<[DetectedObject], Never>?
-    @ObservationIgnored private nonisolated(unsafe) var retainedImageData: Data?
+    private nonisolated(unsafe) var pendingContinuation: CheckedContinuation<[DetectedObject], Never>?
+    private nonisolated(unsafe) var retainedImageData: Data?
 
     private init() {}
 
-    func initialize() async {
-        guard !isInitialized else { return }
+    /// Initialize YOLO model. Returns nil on success, or an error message on failure.
+    func initialize() async -> String? {
+        guard !isInitialized else { return nil }
         let success = await Task.detached(priority: .userInitiated) {
             InitializeYOLO(
-                modelName: "yolo11l_seg",
+                modelName: "yolo11l-seg",
                 confidenceThreshold: 0.7,
                 iouThreshold: 0.5,
                 scaleMethod: "scaleFit"
@@ -46,13 +47,17 @@ final class ObjectDetectionService: @unchecked Sendable {
             RegisterYOLOCallback(callback: yoloResultHandler)
             isInitialized = true
             print("YOLO initialized successfully")
+            return nil
         } else {
-            print("YOLO initialization failed")
+            let msg = "Failed to load YOLO model 'yolo11l-seg'. Check that the compiled model (.mlmodelc) is included in the app bundle."
+            print(msg)
+            return msg
         }
     }
 
     func detect(frame: ARFrame) async -> [DetectedObject] {
-        if !isInitialized { await initialize() }
+        if !isInitialized { _ = await initialize() }
+        guard isInitialized else { return [] }
 
         guard let bgra = frame.capturedImage.toBGRAData() else {
             return []

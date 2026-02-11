@@ -9,7 +9,8 @@ struct DetectionResultsView: View {
     let imageWidth: CGFloat
     let imageHeight: CGFloat
     let elapsedMs: Double
-    let onPlaceEffect: (ParticleEffectType, DetectedObject) -> Void
+    let depthSamples: [DepthSample?]
+    let onPlaceEffect: (EffectType, DetectedObject) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var composited: UIImage?
@@ -247,35 +248,45 @@ struct DetectionResultsView: View {
 
             let uiCtx = ctx.cgContext
 
-            // DEBUG: corner markers to verify coordinate system
-            // RED = origin (0,0), BLUE = (maxX, 0), YELLOW = (0, maxY)
-            let markerSize: CGFloat = 60
-            uiCtx.setFillColor(UIColor.red.cgColor)
-            uiCtx.fill(CGRect(x: 0, y: 0, width: markerSize, height: markerSize))
-            uiCtx.setFillColor(UIColor.blue.cgColor)
-            uiCtx.fill(CGRect(x: w - markerSize, y: 0, width: markerSize, height: markerSize))
-            uiCtx.setFillColor(UIColor.yellow.cgColor)
-            uiCtx.fill(CGRect(x: 0, y: h - markerSize, width: markerSize, height: markerSize))
+            // Brownish yellow for fused depth, green for LiDAR depth
+            let fusedColor = UIColor(red: 0.8, green: 0.6, blue: 0.1, alpha: 0.7)
+            let lidarColor = UIColor.green.withAlphaComponent(0.7)
 
-            print("[DEBUG] portrait CGImage: \(Int(w))×\(Int(h)), imageWidth=\(imageWidth), imageHeight=\(imageHeight)")
-
-            for detection in detections {
+            for (i, detection) in detections.enumerated() {
                 let portRect = landscapeToPortrait(detection.boundingBox)
-                print("[DEBUG] \(detection.className): landscape bbox=\(detection.boundingBox) → portrait=\(portRect)")
+                let sample = i < depthSamples.count ? depthSamples[i] : nil
+                let bgColor = (sample?.isLiDAR == true) ? lidarColor : fusedColor
+                let strokeColor = (sample?.isLiDAR == true) ? UIColor.green : UIColor(red: 0.8, green: 0.6, blue: 0.1, alpha: 1.0)
 
-                // Green bbox
-                uiCtx.setStrokeColor(UIColor.green.cgColor)
+                // Bbox
+                uiCtx.setStrokeColor(strokeColor.cgColor)
                 uiCtx.setLineWidth(4)
                 uiCtx.stroke(portRect)
 
-                // Centered label
-                let label = "\(detection.className) \(Int(detection.confidence * 100))%"
+                // Two-line label: "className 95%" and "2.30 m"
+                let line1 = "\(detection.className) \(Int(detection.confidence * 100))%"
+                let distStr: String
+                if let s = sample {
+                    distStr = String(format: "%.2f m", s.depth)
+                } else {
+                    distStr = "-- m"
+                }
+                let label = "\(line1)\n\(distStr)"
+
                 let font = UIFont.boldSystemFont(ofSize: 28)
+                let paragraphStyle = NSMutableParagraphStyle()
+                paragraphStyle.alignment = .center
                 let attrs: [NSAttributedString.Key: Any] = [
                     .font: font,
                     .foregroundColor: UIColor.white,
+                    .paragraphStyle: paragraphStyle,
                 ]
-                let labelSize = (label as NSString).size(withAttributes: attrs)
+                let attrStr = NSAttributedString(string: label, attributes: attrs)
+                let labelSize = attrStr.boundingRect(
+                    with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+                    options: [.usesLineFragmentOrigin, .usesFontLeading],
+                    context: nil
+                ).size
 
                 // Label background
                 let bgRect = CGRect(
@@ -284,15 +295,17 @@ struct DetectionResultsView: View {
                     width: labelSize.width + 12,
                     height: labelSize.height + 6
                 )
-                uiCtx.setFillColor(UIColor.green.withAlphaComponent(0.7).cgColor)
+                uiCtx.setFillColor(bgColor.cgColor)
                 uiCtx.fill(bgRect)
 
-                // Label text
-                let textPoint = CGPoint(
+                // Label text (draw with rect for multiline support)
+                let textRect = CGRect(
                     x: portRect.midX - labelSize.width / 2,
-                    y: portRect.midY - labelSize.height / 2
+                    y: portRect.midY - labelSize.height / 2,
+                    width: labelSize.width,
+                    height: labelSize.height
                 )
-                (label as NSString).draw(at: textPoint, withAttributes: attrs)
+                attrStr.draw(in: textRect)
             }
         }
     }

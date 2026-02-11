@@ -2,7 +2,7 @@ import SwiftUI
 
 struct EffectPickerView: View {
     let objectClass: String
-    let onSelect: (ParticleEffectType) -> Void
+    let onSelect: (EffectType) -> Void
 
     var body: some View {
         VStack(spacing: 16) {
@@ -12,7 +12,7 @@ struct EffectPickerView: View {
             LazyVGrid(columns: [
                 GridItem(.adaptive(minimum: 70), spacing: 12)
             ], spacing: 12) {
-                ForEach(ParticleEffectType.allCases, id: \.self) { type in
+                ForEach(EffectType.available, id: \.self) { type in
                     Button {
                         onSelect(type)
                     } label: {

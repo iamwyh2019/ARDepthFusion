@@ -1,9 +1,9 @@
-import RealityKit
+import SceneKit
 import Foundation
 
 struct PlacedEffect: Identifiable {
     let id = UUID()
-    let type: ParticleEffectType
+    let type: EffectType
     let objectClass: String
-    let anchor: AnchorEntity
+    let node: SCNNode
 }

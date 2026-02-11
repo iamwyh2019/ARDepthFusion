@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		5858AE852F3BBC58007C1787 /* ARKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5858AE842F3BBC58007C1787 /* ARKit.framework */; };
-		5858AE872F3BBC5D007C1787 /* RealityKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5858AE862F3BBC5D007C1787 /* RealityKit.framework */; };
 		5858AE892F3BBC61007C1787 /* CoreML.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5858AE882F3BBC61007C1787 /* CoreML.framework */; };
 		5858AE8B2F3BBC6B007C1787 /* Vision.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5858AE8A2F3BBC6B007C1787 /* Vision.framework */; };
 		5858AE8D2F3BBC6F007C1787 /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5858AE8C2F3BBC6F007C1787 /* Accelerate.framework */; };
@@ -50,7 +49,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				5858AE8B2F3BBC6B007C1787 /* Vision.framework in Frameworks */,
-				5858AE872F3BBC5D007C1787 /* RealityKit.framework in Frameworks */,
 				5858AE8D2F3BBC6F007C1787 /* Accelerate.framework in Frameworks */,
 				5858AE852F3BBC58007C1787 /* ARKit.framework in Frameworks */,
 				5858AE892F3BBC61007C1787 /* CoreML.framework in Frameworks */,
@@ -310,7 +308,7 @@
 				INFOPLIST_KEY_UIRequiredDeviceCapabilities = arkit;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -352,7 +350,7 @@
 				INFOPLIST_KEY_UIRequiredDeviceCapabilities = arkit;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

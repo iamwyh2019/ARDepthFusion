@@ -1,11 +1,9 @@
 import ARKit
-import RealityKit
-import Observation
+import Combine
 
-@Observable
-final class ARSessionCoordinator: NSObject, ARSessionDelegate, @unchecked Sendable {
-    var hasLiDAR = false
-    private(set) var latestFrame: ARFrame?
+final class ARSessionCoordinator: NSObject, ObservableObject, ARSessionDelegate, @unchecked Sendable {
+    @Published var hasLiDAR = false
+    @Published private(set) var latestFrame: ARFrame?
 
     nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
         let lidarAvailable = frame.sceneDepth != nil

@@ -11,16 +11,18 @@ nonisolated func floatArrayToCGImage(data: UnsafePointer<Float>, width: Int, hei
     let retainedBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: byteCount)
     defer { buffer.deallocate() }
 
+    nonisolated(unsafe) let buf = buffer
+    nonisolated(unsafe) let src = data
     DispatchQueue.concurrentPerform(iterations: height) { y in
         for x in 0..<width {
             let sourceY = flipY ? (height - 1 - y) : y
             let sourceIndex = (sourceY * width + x) * 4
             let destIndex = y * width * 4 + x * 4
 
-            buffer[destIndex + 0] = UInt8(max(0, min(255, data[sourceIndex + 0] * 255.0)))
-            buffer[destIndex + 1] = UInt8(max(0, min(255, data[sourceIndex + 1] * 255.0)))
-            buffer[destIndex + 2] = UInt8(max(0, min(255, data[sourceIndex + 2] * 255.0)))
-            buffer[destIndex + 3] = UInt8(max(0, min(255, data[sourceIndex + 3] * 255.0)))
+            buf[destIndex + 0] = UInt8(max(0, min(255, src[sourceIndex + 0] * 255.0)))
+            buf[destIndex + 1] = UInt8(max(0, min(255, src[sourceIndex + 1] * 255.0)))
+            buf[destIndex + 2] = UInt8(max(0, min(255, src[sourceIndex + 2] * 255.0)))
+            buf[destIndex + 3] = UInt8(max(0, min(255, src[sourceIndex + 3] * 255.0)))
         }
     }
 
@@ -81,12 +83,14 @@ nonisolated func bytesToCVPixelBuffer(data: UnsafePointer<UInt8>, width: Int, he
     let baseAddress = CVPixelBufferGetBaseAddress(buffer)!
     let bytesPerRow = CVPixelBufferGetBytesPerRow(buffer)
 
+    nonisolated(unsafe) let dst = baseAddress
+    nonisolated(unsafe) let src = data
     DispatchQueue.concurrentPerform(iterations: height) { y in
         let sourceY = flipY ? (height - 1 - y) : y
         let sourceStart = sourceY * width * 4
         let destStart = y * bytesPerRow
 
-        memcpy(baseAddress + destStart, data + sourceStart, width * 4)
+        memcpy(dst + destStart, src + sourceStart, width * 4)
     }
 
     return buffer
@@ -111,6 +115,8 @@ nonisolated func floatArrayToCVPixelBuffer(data: UnsafePointer<Float>, width: In
     let width4 = width * 4
     let lookup = (0...255).map { UInt8($0) }
 
+    nonisolated(unsafe) let src = data
+    nonisolated(unsafe) let dst = uint8Buffer
     DispatchQueue.concurrentPerform(iterations: height) { y in
         let sourceY = flipY ? (height - 1 - y) : y
         let sourceStart = sourceY * width4
@@ -120,15 +126,15 @@ nonisolated func floatArrayToCVPixelBuffer(data: UnsafePointer<Float>, width: In
             let sourceIndex = sourceStart + x
             let destIndex = destStart + x
 
-            let r = Int(data[sourceIndex] * 255.0)
-            let g = Int(data[sourceIndex + 1] * 255.0)
-            let b = Int(data[sourceIndex + 2] * 255.0)
-            let a = Int(data[sourceIndex + 3] * 255.0)
+            let r = Int(src[sourceIndex] * 255.0)
+            let g = Int(src[sourceIndex + 1] * 255.0)
+            let b = Int(src[sourceIndex + 2] * 255.0)
+            let a = Int(src[sourceIndex + 3] * 255.0)
 
-            uint8Buffer[destIndex] = lookup[max(0, min(255, r))]
-            uint8Buffer[destIndex + 1] = lookup[max(0, min(255, g))]
-            uint8Buffer[destIndex + 2] = lookup[max(0, min(255, b))]
-            uint8Buffer[destIndex + 3] = lookup[max(0, min(255, a))]
+            dst[destIndex] = lookup[max(0, min(255, r))]
+            dst[destIndex + 1] = lookup[max(0, min(255, g))]
+            dst[destIndex + 2] = lookup[max(0, min(255, b))]
+            dst[destIndex + 3] = lookup[max(0, min(255, a))]
         }
     }
 

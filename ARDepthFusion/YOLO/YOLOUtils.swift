@@ -180,11 +180,13 @@ nonisolated func cropMaskPhysical(mask: [Float], width: Int, height: Int, bbox: 
 
    mask.withUnsafeBufferPointer { srcPtr in
        cropped.withUnsafeMutableBufferPointer { dstPtr in
+           nonisolated(unsafe) let src = srcPtr.baseAddress!
+           nonisolated(unsafe) let dst = dstPtr.baseAddress!
            DispatchQueue.concurrentPerform(iterations: cropHeight) { y in
                let srcOffset = (y + y1) * width + x1
                let dstOffset = y * cropWidth
-               memcpy(dstPtr.baseAddress! + dstOffset,
-                     srcPtr.baseAddress! + srcOffset,
+               memcpy(dst + dstOffset,
+                     src + srcOffset,
                      cropWidth * MemoryLayout<Float>.stride)
            }
        }
@@ -382,8 +384,8 @@ nonisolated func getCoordinateRestorer(
         dx = -cropX
         dy = -cropY
 
-    @unknown default:
-        NSLog("Seriously? What mode could it be?")
+    default:
+        NSLog("Unsupported crop/scale option")
         break
     }
 
