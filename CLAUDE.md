@@ -36,7 +36,7 @@ A real-time AR iOS app that detects objects and places pre-rendered video effect
 | Save feature | Not needed |
 | Object detection | **Integrated YOLO source** (yolo11l-seg with segmentation masks) |
 | Confidence threshold | 0.65 |
-| Effect types | Explosion, Fireball, Flamethrower, Smoke, Lightning, Magic, Debug Cube (7 types) |
+| Effect types | Explosion, Flamethrower, Smoke, Lightning, Magic, Snow, Tornado, Love, Debug Cube (9 types) |
 | UI Language | English |
 | ML Compute Units | **CPU + Neural Engine only** (GPU reserved for SceneKit rendering) |
 
@@ -66,7 +66,7 @@ ARDepthFusion/
 │   ├── DetectedObject.swift             # Detection result (bbox, class, mask, centroid)
 │   ├── DepthFusionResult.swift          # Fused depth map model
 │   ├── PlacedEffect.swift               # Placed effect tracking (SCNNode)
-│   └── EffectType.swift                 # Effect type enum (7 types incl. debugCube)
+│   └── EffectType.swift                 # Effect type enum (9 types incl. debugCube)
 │
 ├── Services/
 │   ├── ObjectDetectionService.swift     # YOLO wrapper (C ABI bridge)
@@ -175,7 +175,7 @@ sceneView.session.run(config)
 
 ### 5. Video Effects (SceneKit)
 
-7 effect types: explosion, fireball, flamethrower, smoke, lightning, magic, debugCube.
+9 effect types: explosion, flamethrower, smoke, lightning, magic, snow, tornado, love, debugCube.
 
 - Pre-rendered .mov videos (HEVC with alpha) rendered on `SCNPlane` billboards
 - `AVPlayerItemVideoOutput` + `CVMetalTextureCache` pipeline for per-frame texture updates

@@ -2,18 +2,19 @@ import Foundation
 
 enum EffectType: String, CaseIterable, Identifiable {
     case explosion
-    case fireball
     case flamethrower
     case smoke
     case lightning
     case magic
+    case snow
+    case tornado
+    case love
     case debugCube
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
-        case .fireball: return "Fireball"
         case .flamethrower: return "Flamethrower"
         case .debugCube: return "Debug Cube"
         default: return rawValue.capitalized
@@ -23,11 +24,13 @@ enum EffectType: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .explosion: return "burst.fill"
-        case .fireball: return "flame.fill"
         case .flamethrower: return "flame"
         case .smoke: return "cloud.fill"
         case .lightning: return "bolt.fill"
         case .magic: return "wand.and.stars"
+        case .snow: return "snowflake"
+        case .tornado: return "tornado"
+        case .love: return "heart.fill"
         case .debugCube: return "cube.fill"
         }
     }
