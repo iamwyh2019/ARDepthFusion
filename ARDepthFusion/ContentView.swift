@@ -174,51 +174,66 @@ struct ContentView: View {
         isDetecting = true
         statusText = "Detecting..."
         detections = []
-        imageWidth = CGFloat(CVPixelBufferGetWidth(frame.capturedImage))
-        imageHeight = CGFloat(CVPixelBufferGetHeight(frame.capturedImage))
 
-        // Copy pixel data immediately to avoid retaining the ARFrame's CVPixelBuffer.
-        // CIImage(cvPixelBuffer:) holds a reference to the buffer, starving ARSession.
-        let tempCI = CIImage(cvPixelBuffer: frame.capturedImage)
-        if let cgCopy = sharedCIContext.createCGImage(tempCI, from: tempCI.extent) {
-            capturedCIImage = CIImage(cgImage: cgCopy)
-        }
+        let imgW = CVPixelBufferGetWidth(frame.capturedImage)
+        let imgH = CVPixelBufferGetHeight(frame.capturedImage)
+        imageWidth = CGFloat(imgW)
+        imageHeight = CGFloat(imgH)
+
         capturedIntrinsics = frame.camera.intrinsics
         capturedCameraTransform = frame.camera.transform
 
-        // NOTE: `frame` is captured by this Task for the duration of detection
-        // (~100-200ms). This is bounded and acceptable — the CLAUDE.md warning
-        // about ARFrame retention applies to indefinite storage (properties,
-        // CIImage wrapping CVPixelBuffer). The pixel data for display is already
-        // copied above via createCGImage. Changing detect/fusion interfaces to
-        // accept copied buffers would eliminate this but is a larger refactor.
+        // Extract all data from ARFrame BEFORE the async Task.
+        // This lets `frame` be released immediately, preventing ARSession starvation.
+        // Copy pixel data: CIImage(cvPixelBuffer:) retains the buffer, starving ARSession.
+        let cgCopy = sharedCIContext.createCGImage(
+            CIImage(cvPixelBuffer: frame.capturedImage),
+            from: CGRect(x: 0, y: 0, width: imgW, height: imgH)
+        )
+        if let cgCopy { capturedCIImage = CIImage(cgImage: cgCopy) }
+        let bgraData = frame.capturedImage.toBGRAData()
+        let lidarSnapshot = frame.sceneDepth.flatMap {
+            LiDARSnapshot(depthMap: $0.depthMap, confidenceMap: $0.confidenceMap)
+        }
+        // frame is no longer needed — Swift releases it at end of scope
+
         Task {
             let start = CFAbsoluteTimeGetCurrent()
 
-            async let yoloResult = ObjectDetectionService.shared.detect(frame: frame)
-            async let depthEstResult = DepthEstimator.shared?.estimateDepth(
-                pixelBuffer: frame.capturedImage
-            )
+            async let yoloResult: [DetectedObject] = {
+                if let bgra = bgraData {
+                    return await ObjectDetectionService.shared.detect(
+                        bgraData: bgra.data, width: bgra.width, height: bgra.height)
+                }
+                return []
+            }()
+            async let depthEstResult: DepthMapData? = {
+                if let cgCopy {
+                    return await DepthEstimator.shared?.estimateDepth(cgImage: cgCopy)
+                }
+                return nil
+            }()
 
             let objects = await yoloResult
             let depthArray = await depthEstResult
 
             var fusionResult: DepthFusionResult?
-            if let depthArray {
+            if let depthArray, let lidarSnapshot {
                 fusionResult = DepthFusion.fuse(
                     relativeDepth: depthArray,
-                    arFrame: frame
+                    lidar: lidarSnapshot,
+                    imageWidth: imgW,
+                    imageHeight: imgH
                 )
             }
 
             let elapsed = CFAbsoluteTimeGetCurrent() - start
 
             // Compute per-detection depth: prefer LiDAR, fall back to fused
-            let imgW = Int(imageWidth)
-            let imgH = Int(imageHeight)
             var samples: [DepthSample?] = []
             for obj in objects {
-                let sample = sampleDepth(at: obj.centroid, from: frame,
+                let sample = sampleDepth(at: obj.centroid,
+                                         lidar: lidarSnapshot,
                                          fusionResult: fusionResult,
                                          imageWidth: imgW, imageHeight: imgH)
                 samples.append(sample)
@@ -255,18 +270,20 @@ struct ContentView: View {
     /// Sample depth at a point: prefer high-confidence LiDAR, fall back to fused depth.
     private func sampleDepth(
         at point: CGPoint,
-        from frame: ARFrame,
+        lidar: LiDARSnapshot?,
         fusionResult: DepthFusionResult?,
         imageWidth: Int,
         imageHeight: Int
     ) -> DepthSample? {
-        let (lidarDepth, confidence) = sampleLiDAR(at: point, from: frame,
-                                                    imageWidth: imageWidth,
-                                                    imageHeight: imageHeight)
-        if let depth = lidarDepth,
-           confidence >= 2,
-           depth > 0.1 && depth < 5.0 && depth.isFinite {
-            return DepthSample(depth: depth, isLiDAR: true)
+        if let lidar {
+            let (lidarDepth, confidence) = sampleLiDAR(at: point, lidar: lidar,
+                                                        imageWidth: imageWidth,
+                                                        imageHeight: imageHeight)
+            if let depth = lidarDepth,
+               confidence >= 2,
+               depth > 0.1 && depth < 5.0 && depth.isFinite {
+                return DepthSample(depth: depth, isLiDAR: true)
+            }
         }
         if let depth = fusionResult?.sampleDepth(at: point) {
             return DepthSample(depth: depth, isLiDAR: false)
@@ -274,44 +291,22 @@ struct ContentView: View {
         return nil
     }
 
-    /// Sample LiDAR depth map at a camera-image-space point.
+    /// Sample LiDAR depth at a camera-image-space point from a pre-copied snapshot.
     private func sampleLiDAR(
         at imagePoint: CGPoint,
-        from frame: ARFrame,
+        lidar: LiDARSnapshot,
         imageWidth: Int,
         imageHeight: Int
     ) -> (depth: Float?, confidence: UInt8) {
-        guard let sceneDepth = frame.sceneDepth else { return (nil, 0) }
-
-        let depthMap = sceneDepth.depthMap
-        let lidarW = CVPixelBufferGetWidth(depthMap)
-        let lidarH = CVPixelBufferGetHeight(depthMap)
-
         let normX = Float(imagePoint.x) / Float(imageWidth)
         let normY = Float(imagePoint.y) / Float(imageHeight)
-        let lx = min(Int(normX * Float(lidarW)), lidarW - 1)
-        let ly = min(Int(normY * Float(lidarH)), lidarH - 1)
+        let lx = min(Int(normX * Float(lidar.width)), lidar.width - 1)
+        let ly = min(Int(normY * Float(lidar.height)), lidar.height - 1)
 
         guard lx >= 0, ly >= 0 else { return (nil, 0) }
 
-        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
-
-        guard let depthPtr = CVPixelBufferGetBaseAddress(depthMap)?
-                .assumingMemoryBound(to: Float32.self) else { return (nil, 0) }
-        let depth = depthPtr[ly * lidarW + lx]
-
-        var confidence: UInt8 = 0
-        if let confMap = sceneDepth.confidenceMap {
-            CVPixelBufferLockBaseAddress(confMap, .readOnly)
-            defer { CVPixelBufferUnlockBaseAddress(confMap, .readOnly) }
-            if let confPtr = CVPixelBufferGetBaseAddress(confMap)?
-                    .assumingMemoryBound(to: UInt8.self) {
-                confidence = confPtr[ly * lidarW + lx]
-            }
-        }
-
-        return (depth, confidence)
+        let idx = ly * lidar.width + lx
+        return (lidar.depthValues[idx], lidar.confidenceValues[idx])
     }
 
     /// Place all queued effects after the detection results screen is dismissed.

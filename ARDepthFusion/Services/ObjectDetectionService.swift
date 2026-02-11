@@ -1,5 +1,6 @@
-import ARKit
 import Combine
+import CoreGraphics
+import Foundation
 
 nonisolated private func yoloResultHandler(_ result: YOLODetectionResult) {
     let objects = result.detections.map { det in
@@ -55,27 +56,23 @@ final class ObjectDetectionService: ObservableObject, @unchecked Sendable {
         }
     }
 
-    func detect(frame: ARFrame) async -> [DetectedObject] {
+    func detect(bgraData: Data, width: Int, height: Int) async -> [DetectedObject] {
         if !isInitialized { _ = await initialize() }
         guard isInitialized else { return [] }
 
-        guard let bgra = frame.capturedImage.toBGRAData() else {
-            return []
-        }
-
-        let nsData = bgra.data as NSData
+        let nsData = bgraData as NSData
         let baseAddress = nsData.bytes.assumingMemoryBound(to: UInt8.self)
 
         return await withCheckedContinuation { continuation in
             lock.lock()
             pendingContinuation = continuation
-            retainedImageData = bgra.data
+            retainedImageData = bgraData
             lock.unlock()
 
             RunYOLO_Byte(
                 imageData: baseAddress,
-                width: bgra.width,
-                height: bgra.height,
+                width: width,
+                height: height,
                 timestamp: UInt64(Date().timeIntervalSince1970 * 1000)
             )
         }

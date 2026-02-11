@@ -36,7 +36,7 @@ final class DepthEstimator: @unchecked Sendable {
         print("Depth Anything V2 model loaded")
     }
 
-    nonisolated func estimateDepth(pixelBuffer: CVPixelBuffer) async -> DepthMapData? {
+    nonisolated func estimateDepth(cgImage: CGImage) async -> DepthMapData? {
         let start = CFAbsoluteTimeGetCurrent()
 
         let result: DepthMapData? = await withCheckedContinuation { continuation in
@@ -54,7 +54,7 @@ final class DepthEstimator: @unchecked Sendable {
             }
             request.imageCropAndScaleOption = .scaleFill
 
-            let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
+            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
             do {
                 try handler.perform([request])
             } catch {

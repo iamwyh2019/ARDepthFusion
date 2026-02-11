@@ -1,9 +1,60 @@
-import CoreML
+import CoreVideo
 import Foundation
 
 struct DepthSample {
     let depth: Float
     let isLiDAR: Bool
+}
+
+/// Snapshot of LiDAR depth + confidence data, copied from ARFrame.sceneDepth.
+/// This avoids retaining the ARFrame (which starves ARSession's frame pipeline).
+struct LiDARSnapshot {
+    let depthValues: [Float]
+    let confidenceValues: [UInt8]
+    let width: Int
+    let height: Int
+
+    /// Create by copying pixel buffer data from sceneDepth.
+    init?(depthMap: CVPixelBuffer, confidenceMap: CVPixelBuffer?) {
+        let w = CVPixelBufferGetWidth(depthMap)
+        let h = CVPixelBufferGetHeight(depthMap)
+
+        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
+
+        guard let depthBase = CVPixelBufferGetBaseAddress(depthMap) else { return nil }
+        let depthBytesPerRow = CVPixelBufferGetBytesPerRow(depthMap)
+
+        var depths = [Float](repeating: 0, count: w * h)
+        for y in 0..<h {
+            let rowPtr = depthBase.advanced(by: y * depthBytesPerRow)
+                .assumingMemoryBound(to: Float32.self)
+            for x in 0..<w {
+                depths[y * w + x] = rowPtr[x]
+            }
+        }
+
+        var confidences = [UInt8](repeating: 0, count: w * h)
+        if let confMap = confidenceMap {
+            CVPixelBufferLockBaseAddress(confMap, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(confMap, .readOnly) }
+            if let confBase = CVPixelBufferGetBaseAddress(confMap) {
+                let confBytesPerRow = CVPixelBufferGetBytesPerRow(confMap)
+                for y in 0..<h {
+                    let rowPtr = confBase.advanced(by: y * confBytesPerRow)
+                        .assumingMemoryBound(to: UInt8.self)
+                    for x in 0..<w {
+                        confidences[y * w + x] = rowPtr[x]
+                    }
+                }
+            }
+        }
+
+        self.depthValues = depths
+        self.confidenceValues = confidences
+        self.width = w
+        self.height = h
+    }
 }
 
 struct DepthFusionResult {

@@ -1,41 +1,13 @@
-import ARKit
-import CoreML
-import Accelerate
+import Foundation
 
 enum DepthFusion {
-    static func fuse(relativeDepth: DepthMapData, arFrame: ARFrame) -> DepthFusionResult? {
-        guard let sceneDepth = arFrame.sceneDepth else {
-            print("DepthFusion: No LiDAR sceneDepth available")
-            return nil
-        }
-
-        let lidarDepthMap = sceneDepth.depthMap
-        guard let lidarConfMap = sceneDepth.confidenceMap else {
-            print("DepthFusion: No confidence map")
-            return nil
-        }
-
-        let lidarW = CVPixelBufferGetWidth(lidarDepthMap)
-        let lidarH = CVPixelBufferGetHeight(lidarDepthMap)
+    static func fuse(relativeDepth: DepthMapData, lidar: LiDARSnapshot, imageWidth: Int, imageHeight: Int) -> DepthFusionResult? {
+        let lidarW = lidar.width
+        let lidarH = lidar.height
 
         let daW = relativeDepth.width
         let daH = relativeDepth.height
         let daArray = relativeDepth.values
-
-        CVPixelBufferLockBaseAddress(lidarDepthMap, .readOnly)
-        CVPixelBufferLockBaseAddress(lidarConfMap, .readOnly)
-        defer {
-            CVPixelBufferUnlockBaseAddress(lidarDepthMap, .readOnly)
-            CVPixelBufferUnlockBaseAddress(lidarConfMap, .readOnly)
-        }
-
-        guard let lidarBase = CVPixelBufferGetBaseAddress(lidarDepthMap),
-              let confBase = CVPixelBufferGetBaseAddress(lidarConfMap) else {
-            return nil
-        }
-
-        let lidarBytesPerRow = CVPixelBufferGetBytesPerRow(lidarDepthMap)
-        let confBytesPerRow = CVPixelBufferGetBytesPerRow(lidarConfMap)
 
         // Sample Depth Anything at LiDAR pixel locations
         // DO NOT upsample LiDAR — iterate LiDAR pixels and sample DA via bilinear interp
@@ -43,15 +15,12 @@ enum DepthFusion {
         var daValues: [Float] = []
 
         for ly in 0..<lidarH {
-            let lidarRowPtr = lidarBase.advanced(by: ly * lidarBytesPerRow)
-                .assumingMemoryBound(to: Float32.self)
-            let confRowPtr = confBase.advanced(by: ly * confBytesPerRow)
-                .assumingMemoryBound(to: UInt8.self)
             for lx in 0..<lidarW {
-                let confidence = confRowPtr[lx]
+                let idx = ly * lidarW + lx
+                let confidence = lidar.confidenceValues[idx]
                 guard confidence >= 2 else { continue }
 
-                let lidarDepth = lidarRowPtr[lx]
+                let lidarDepth = lidar.depthValues[idx]
                 guard lidarDepth >= 0.1, lidarDepth <= 4.0 else { continue }
 
                 // Map LiDAR pixel to Depth Anything coords
@@ -108,9 +77,6 @@ enum DepthFusion {
             fusedDepth[i] = max(0.01, alpha * daArray[i] + beta)
         }
 
-        let imageW = CVPixelBufferGetWidth(arFrame.capturedImage)
-        let imageH = CVPixelBufferGetHeight(arFrame.capturedImage)
-
         return DepthFusionResult(
             depthMap: fusedDepth,
             width: daW,
@@ -118,8 +84,8 @@ enum DepthFusion {
             alpha: alpha,
             beta: beta,
             validPairCount: lidarValues.count,
-            imageWidth: imageW,
-            imageHeight: imageH
+            imageWidth: imageWidth,
+            imageHeight: imageHeight
         )
     }
 

@@ -141,133 +141,23 @@ Fuse Depth Anything (relative) with LiDAR (absolute) to get metric depth.
 **Key principle**: Do NOT upsample LiDAR. Sample Depth Anything at LiDAR pixel locations.
 
 ```swift
-class DepthFusion {
+/// LiDARSnapshot: pre-copied depth + confidence arrays from ARFrame.sceneDepth.
+/// Created synchronously before async Task to avoid retaining ARFrame.
+struct LiDARSnapshot {
+    let depthValues: [Float]
+    let confidenceValues: [UInt8]
+    let width: Int
+    let height: Int
+    init?(depthMap: CVPixelBuffer, confidenceMap: CVPixelBuffer?)
+}
 
-    struct Config {
-        var minDepth: Float = 0.1          // meters
-        var maxDepth: Float = 4.0          // meters
-        var minConfidence: UInt8 = 2       // ARConfidenceLevel.high
-    }
-
-    struct FusionResult {
-        let depthMap: [Float]              // Metric depth in meters
-        let width: Int
-        let height: Int
-        let alpha: Float                   // Scale factor
-        let beta: Float                    // Offset
-    }
-
-    var config = Config()
-
+enum DepthFusion {
     /// Fuse relative depth with LiDAR absolute depth
     /// Model: D_metric = alpha * D_relative + beta
-    func fuse(relativeDepth: MLMultiArray, arFrame: ARFrame) -> FusionResult? {
-
-        guard let sceneDepth = arFrame.sceneDepth else { return nil }
-
-        let lidarBuffer = sceneDepth.depthMap
-        let confidenceBuffer = sceneDepth.confidenceMap
-
-        let lidarWidth = CVPixelBufferGetWidth(lidarBuffer)
-        let lidarHeight = CVPixelBufferGetHeight(lidarBuffer)
-        let daWidth = relativeDepth.shape[2].intValue
-        let daHeight = relativeDepth.shape[1].intValue
-
-        // Collect valid pairs at LiDAR pixel locations
-        var pairs: [(rel: Float, abs: Float)] = []
-
-        CVPixelBufferLockBaseAddress(lidarBuffer, .readOnly)
-        confidenceBuffer.map { CVPixelBufferLockBaseAddress($0, .readOnly) }
-        defer {
-            CVPixelBufferUnlockBaseAddress(lidarBuffer, .readOnly)
-            confidenceBuffer.map { CVPixelBufferUnlockBaseAddress($0, .readOnly) }
-        }
-
-        guard let depthPtr = CVPixelBufferGetBaseAddress(lidarBuffer)?
-                .assumingMemoryBound(to: Float32.self) else { return nil }
-
-        let confPtr = confidenceBuffer.flatMap {
-            CVPixelBufferGetBaseAddress($0)?.assumingMemoryBound(to: UInt8.self)
-        }
-
-        for ly in 0..<lidarHeight {
-            for lx in 0..<lidarWidth {
-                let idx = ly * lidarWidth + lx
-                let lidarDepth = depthPtr[idx]
-                let confidence = confPtr?[idx] ?? 2
-
-                // Filter by confidence and depth range
-                guard confidence >= config.minConfidence,
-                      lidarDepth > config.minDepth,
-                      lidarDepth < config.maxDepth,
-                      lidarDepth.isFinite else { continue }
-
-                // Map LiDAR coord to Depth Anything coord (normalized)
-                let normX = Float(lx) / Float(lidarWidth - 1)
-                let normY = Float(ly) / Float(lidarHeight - 1)
-                let daX = normX * Float(daWidth - 1)
-                let daY = normY * Float(daHeight - 1)
-
-                // Bilinear sample from Depth Anything
-                let relDepth = bilinearSample(relativeDepth, x: daX, y: daY,
-                                              width: daWidth, height: daHeight)
-
-                guard relDepth.isFinite, relDepth > 0 else { continue }
-
-                pairs.append((rel: relDepth, abs: lidarDepth))
-            }
-        }
-
-        guard pairs.count >= 20 else { return nil }
-
-        // Least squares fit: abs = alpha * rel + beta
-        let (alpha, beta) = leastSquaresFit(pairs)
-
-        guard alpha > 0.01, alpha < 100, beta.isFinite else { return nil }
-
-        // Apply to full depth map
-        var metricDepth = [Float](repeating: 0, count: daWidth * daHeight)
-        for y in 0..<daHeight {
-            for x in 0..<daWidth {
-                let rel = relativeDepth[[0, y, x] as [NSNumber]].floatValue
-                metricDepth[y * daWidth + x] = max(0.01, min(alpha * rel + beta, 100.0))
-            }
-        }
-
-        return FusionResult(depthMap: metricDepth, width: daWidth, height: daHeight,
-                           alpha: alpha, beta: beta)
-    }
-
-    private func bilinearSample(_ array: MLMultiArray, x: Float, y: Float,
-                                width: Int, height: Int) -> Float {
-        let x0 = Int(x), y0 = Int(y)
-        let x1 = min(x0 + 1, width - 1), y1 = min(y0 + 1, height - 1)
-        let fx = x - Float(x0), fy = y - Float(y0)
-
-        let v00 = array[[0, y0, x0] as [NSNumber]].floatValue
-        let v10 = array[[0, y0, x1] as [NSNumber]].floatValue
-        let v01 = array[[0, y1, x0] as [NSNumber]].floatValue
-        let v11 = array[[0, y1, x1] as [NSNumber]].floatValue
-
-        return v00*(1-fx)*(1-fy) + v10*fx*(1-fy) + v01*(1-fx)*fy + v11*fx*fy
-    }
-
-    private func leastSquaresFit(_ pairs: [(rel: Float, abs: Float)]) -> (Float, Float) {
-        let n = Float(pairs.count)
-        var sumX: Float = 0, sumY: Float = 0, sumXY: Float = 0, sumX2: Float = 0
-
-        for p in pairs {
-            sumX += p.rel; sumY += p.abs
-            sumXY += p.rel * p.abs; sumX2 += p.rel * p.rel
-        }
-
-        let denom = n * sumX2 - sumX * sumX
-        guard abs(denom) > 1e-10 else { return (1.0, 0.0) }
-
-        let alpha = (n * sumXY - sumX * sumY) / denom
-        let beta = (sumY * sumX2 - sumX * sumXY) / denom
-        return (alpha, beta)
-    }
+    static func fuse(relativeDepth: DepthMapData, lidar: LiDARSnapshot,
+                     imageWidth: Int, imageHeight: Int) -> DepthFusionResult?
+    // Config: minConfidence >= 2, depth 0.1-4.0m, min 20 valid pairs
+    // Iterates LiDAR pixels, samples Depth Anything via bilinear interp
 }
 ```
 
@@ -342,7 +232,11 @@ let cameraPoint = SIMD4<Float>(x, y, z, 1.0)
 let worldPoint = cameraTransform * cameraPoint
 ```
 
-**ARFrame retention**: Do NOT store `ARFrame` — `CIImage(cvPixelBuffer:)` retains the CVPixelBuffer, starving ARSession. Instead, immediately copy pixels via `CIContext.createCGImage` → `CIImage(cgImage:)`, and store only `intrinsics` + `camera.transform`.
+**ARFrame retention**: Do NOT store `ARFrame` or pass it into async Tasks — `CIImage(cvPixelBuffer:)` retains the CVPixelBuffer, starving ARSession. Instead, extract everything synchronously before the Task:
+- Pixels: `CIContext.createCGImage` → `CGImage` (used for both display and Depth Anything)
+- YOLO: `toBGRAData()` → `Data` (pre-copied BGRA bytes)
+- LiDAR: `LiDARSnapshot(depthMap:confidenceMap:)` → copied `[Float]` + `[UInt8]`
+- Camera: store `intrinsics` + `camera.transform` as value types
 
 ### 7. Effect Scale from Bounding Box
 
@@ -377,8 +271,12 @@ func calculateEffectScale(
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│  Capture: copy pixel data (avoid ARFrame retention),             │
-│           store intrinsics + camera.transform                    │
+│  Capture (sync, before async Task):                              │
+│  - CGImage via CIContext.createCGImage (for display + depth)     │
+│  - BGRA Data via toBGRAData() (for YOLO)                        │
+│  - LiDARSnapshot (copied depth + confidence arrays)              │
+│  - intrinsics + camera.transform (value types)                   │
+│  ARFrame released immediately — no async retention               │
 └──────────────────────────────────────────────────────────────────┘
                                │
               ┌────────────────┼────────────────┐
@@ -425,7 +323,7 @@ func calculateEffectScale(
          ┌─────────────────────────────────┐
          │  processPendingEffects()        │
          │  For each queued effect:        │
-         │  1. Sample fused depth          │
+         │  1. Use pre-computed DepthSample│
          │  2. Unproject centroid → 3D     │
          │  3. Calculate scale from bbox   │
          │  4. EffectManager.placeEffect() │
