@@ -10,41 +10,22 @@ class VideoEffectNode: SCNNode {
     private var textureCache: CVMetalTextureCache?
     private var currentTexture: CVMetalTexture?
     private var loopObserver: NSObjectProtocol?
+    private var stopped = false
 
-    init(url: URL, naturalSize: CGSize, at position: SCNVector3, scale: Float) {
+    /// Create with pre-prepared player components and a shared texture cache.
+    init(player: AVPlayer,
+         videoOutput: AVPlayerItemVideoOutput,
+         loopObserver: NSObjectProtocol,
+         textureCache: CVMetalTextureCache,
+         naturalSize: CGSize,
+         at position: SCNVector3,
+         scale: Float) {
         super.init()
 
-        // Metal texture cache for zero-copy pixel buffer → GPU texture
-        guard let device = MTLCreateSystemDefaultDevice() else {
-            print("[VideoEffectNode] Metal not available")
-            return
-        }
-        var cache: CVMetalTextureCache?
-        CVMetalTextureCacheCreate(nil, nil, device, nil, &cache)
-        textureCache = cache
-
-        // Video output: request BGRA so HEVC alpha is pre-composited into one plane
-        let outputSettings: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
-        ]
-        let output = AVPlayerItemVideoOutput(pixelBufferAttributes: outputSettings)
-        videoOutput = output
-
-        let playerItem = AVPlayerItem(url: url)
-        playerItem.add(output)
-
-        let p = AVPlayer(playerItem: playerItem)
-        player = p
-
-        // Loop: seek back to start when video ends
-        loopObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: playerItem,
-            queue: .main
-        ) { [weak p] _ in
-            p?.seek(to: .zero)
-            p?.play()
-        }
+        self.player = player
+        self.videoOutput = videoOutput
+        self.loopObserver = loopObserver
+        self.textureCache = textureCache
 
         let aspectRatio = naturalSize.width / naturalSize.height
 
@@ -65,7 +46,10 @@ class VideoEffectNode: SCNNode {
         self.geometry = plane
         self.position = position
 
-        // Billboard: always face camera (rotate around Y only)
+        // Billboard: rotate around Y axis only so the plane always faces the
+        // camera horizontally but stays upright (no tilt). This keeps effects
+        // like fire and explosions looking natural. Use [.X, .Y] to fully
+        // face the camera from any angle.
         let billboard = SCNBillboardConstraint()
         billboard.freeAxes = [.Y]
         self.constraints = [billboard]
@@ -75,7 +59,8 @@ class VideoEffectNode: SCNNode {
         link.add(to: .main, forMode: .common)
         displayLink = link
 
-        p.play()
+        // Player was prerolled — start immediately
+        player.play()
     }
 
     @objc private func updateFrame() {
@@ -106,7 +91,16 @@ class VideoEffectNode: SCNNode {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    /// Safety net: if SceneKit removes the node (e.g. session reset), ensure
+    /// the CADisplayLink is invalidated to break the retain cycle.
+    override func removeFromParentNode() {
+        stop()
+        super.removeFromParentNode()
+    }
+
     func stop() {
+        guard !stopped else { return }
+        stopped = true
         displayLink?.invalidate()
         displayLink = nil
         if let observer = loopObserver {
@@ -117,7 +111,6 @@ class VideoEffectNode: SCNNode {
         player = nil
         videoOutput = nil
         currentTexture = nil
-        textureCache = nil
-        removeFromParentNode()
+        // textureCache is shared — don't nil it, EffectManager owns it
     }
 }

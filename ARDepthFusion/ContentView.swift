@@ -16,9 +16,10 @@ struct ContentView: View {
     @StateObject private var effectManager = EffectManager()
     @State private var yoloLoaded = false
     @State private var depthLoaded = false
+    @State private var effectsLoaded = false
     @State private var modelLoadError: String?
 
-    private var modelsLoaded: Bool { yoloLoaded && depthLoaded }
+    private var modelsLoaded: Bool { yoloLoaded && depthLoaded && effectsLoaded }
 
     // Detection results screen state
     @State private var showDetectionResults = false
@@ -102,6 +103,11 @@ struct ContentView: View {
                                     .foregroundStyle(depthLoaded ? .green : .gray)
                                 Text("Depth Anything")
                             }
+                            HStack(spacing: 8) {
+                                Image(systemName: effectsLoaded ? "checkmark.circle.fill" : "circle.dashed")
+                                    .foregroundStyle(effectsLoaded ? .green : .gray)
+                                Text("Video Effects")
+                            }
                         }
                         .foregroundStyle(.white)
                         .font(.subheadline)
@@ -120,6 +126,8 @@ struct ContentView: View {
         }
         .task {
             await effectManager.preloadVideos()
+            await effectManager.prerollAllPlayers()
+            effectsLoaded = true
         }
         .alert("Model Loading Error", isPresented: Binding(
             get: { modelLoadError != nil },
@@ -140,6 +148,7 @@ struct ContentView: View {
                     depthSamples: depthSamples,
                     onPlaceEffect: { type, detection in
                         pendingEffects.append((type: type, detection: detection))
+                        effectManager.preparePlayer(for: type)
                     }
                 )
             }
@@ -169,6 +178,12 @@ struct ContentView: View {
         capturedIntrinsics = frame.camera.intrinsics
         capturedCameraTransform = frame.camera.transform
 
+        // NOTE: `frame` is captured by this Task for the duration of detection
+        // (~100-200ms). This is bounded and acceptable — the CLAUDE.md warning
+        // about ARFrame retention applies to indefinite storage (properties,
+        // CIImage wrapping CVPixelBuffer). The pixel data for display is already
+        // copied above via createCGImage. Changing detect/fusion interfaces to
+        // accept copied buffers would eliminate this but is a larger refactor.
         Task {
             let start = CFAbsoluteTimeGetCurrent()
 
