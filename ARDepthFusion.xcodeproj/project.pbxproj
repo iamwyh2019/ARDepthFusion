@@ -16,10 +16,10 @@
 /* Begin PBXFileReference section */
 		5858AE4D2F3BBB03007C1787 /* ARDepthFusion.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ARDepthFusion.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5858AE842F3BBC58007C1787 /* ARKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ARKit.framework; path = System/Library/Frameworks/ARKit.framework; sourceTree = SDKROOT; };
-		5858AE862F3BBC5D007C1787 /* RealityKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = RealityKit.framework; path = System/Library/Frameworks/RealityKit.framework; sourceTree = SDKROOT; };
 		5858AE882F3BBC61007C1787 /* CoreML.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreML.framework; path = System/Library/Frameworks/CoreML.framework; sourceTree = SDKROOT; };
 		5858AE8A2F3BBC6B007C1787 /* Vision.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Vision.framework; path = System/Library/Frameworks/Vision.framework; sourceTree = SDKROOT; };
 		5858AE8C2F3BBC6F007C1787 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
+		5858AFC22F3CF52E007C1787 /* SceneKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SceneKit.framework; path = System/Library/Frameworks/SceneKit.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -78,10 +78,10 @@
 		5858AE832F3BBC58007C1787 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				5858AFC22F3CF52E007C1787 /* SceneKit.framework */,
 				5858AE8C2F3BBC6F007C1787 /* Accelerate.framework */,
 				5858AE8A2F3BBC6B007C1787 /* Vision.framework */,
 				5858AE882F3BBC61007C1787 /* CoreML.framework */,
-				5858AE862F3BBC5D007C1787 /* RealityKit.framework */,
 				5858AE842F3BBC58007C1787 /* ARKit.framework */,
 			);
 			name = Frameworks;

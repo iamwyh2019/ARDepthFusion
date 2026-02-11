@@ -14,8 +14,11 @@ struct ContentView: View {
     @State private var imageWidth: CGFloat = 1920
     @State private var imageHeight: CGFloat = 1440
     @StateObject private var effectManager = EffectManager()
-    @State private var modelsLoaded = false
+    @State private var yoloLoaded = false
+    @State private var depthLoaded = false
     @State private var modelLoadError: String?
+
+    private var modelsLoaded: Bool { yoloLoaded && depthLoaded }
 
     // Detection results screen state
     @State private var showDetectionResults = false
@@ -81,26 +84,42 @@ struct ContentView: View {
             if !modelsLoaded {
                 ZStack {
                     Color.black.ignoresSafeArea()
-                    VStack(spacing: 16) {
+                    VStack(spacing: 20) {
                         ProgressView()
                             .scaleEffect(1.5)
                             .tint(.white)
                         Text("Loading models...")
                             .foregroundStyle(.white)
                             .font(.headline)
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(spacing: 8) {
+                                Image(systemName: yoloLoaded ? "checkmark.circle.fill" : "circle.dashed")
+                                    .foregroundStyle(yoloLoaded ? .green : .gray)
+                                Text("YOLO Detection")
+                            }
+                            HStack(spacing: 8) {
+                                Image(systemName: depthLoaded ? "checkmark.circle.fill" : "circle.dashed")
+                                    .foregroundStyle(depthLoaded ? .green : .gray)
+                                Text("Depth Anything")
+                            }
+                        }
+                        .foregroundStyle(.white)
+                        .font(.subheadline)
                     }
                 }
             }
         }
         .task {
-            async let yoloError = ObjectDetectionService.shared.initialize()
-            async let depth: Void = DepthEstimator.preload()
-            let error = await yoloError
-            _ = await depth
-            modelsLoaded = true
-            if let error {
-                modelLoadError = error
-            }
+            let error = await ObjectDetectionService.shared.initialize()
+            yoloLoaded = true
+            if let error { modelLoadError = error }
+        }
+        .task {
+            await DepthEstimator.preload()
+            depthLoaded = true
+        }
+        .task {
+            await effectManager.preloadVideos()
         }
         .alert("Model Loading Error", isPresented: Binding(
             get: { modelLoadError != nil },
