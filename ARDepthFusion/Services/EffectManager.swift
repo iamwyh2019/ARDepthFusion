@@ -100,6 +100,9 @@ final class EffectManager: ObservableObject {
         objectClass: String,
         at position: SIMD3<Float>,
         scale: Float,
+        extent: Object3DExtent? = nil,
+        boxDimensions: SIMD3<Float>? = nil,
+        cameraYaw: Float? = nil,
         in sceneView: ARSCNView
     ) {
         let scnPosition = SCNVector3(position.x, position.y, position.z)
@@ -108,11 +111,31 @@ final class EffectManager: ObservableObject {
         if type == .debugCube {
             let rootNode = SCNNode()
             rootNode.position = scnPosition
-            let box = SCNBox(width: 0.1, height: 0.1, length: 0.1, chamferRadius: 0)
+
+            // Rotate around Y to align with OBB principal axis (PCA-aligned or camera-aligned fallback)
+            if let yaw = cameraYaw {
+                rootNode.eulerAngles.y = yaw
+            }
+
+            // Use exact OBB dimensions from caller, fallback to 10cm cube
+            let boxW: CGFloat
+            let boxH: CGFloat
+            let boxD: CGFloat
+            if let dims = boxDimensions {
+                boxW = CGFloat(dims.x)  // PCA principal axis (or camera-right for fallback)
+                boxH = CGFloat(dims.y)  // up axis (gravity)
+                boxD = CGFloat(dims.z)  // PCA secondary axis (or camera-forward for fallback)
+            } else {
+                boxW = 0.1; boxH = 0.1; boxD = 0.1
+            }
+
+            let box = SCNBox(width: boxW, height: boxH, length: boxD, chamferRadius: 0)
             let material = SCNMaterial()
-            material.diffuse.contents = UIColor.red
+            material.diffuse.contents = UIColor.red.withAlphaComponent(0.5)
+            material.isDoubleSided = true
             box.materials = [material]
             let cubeNode = SCNNode(geometry: box)
+            // Position is already OBB center — no offset needed
             rootNode.addChildNode(cubeNode)
             node = rootNode
         } else if let videoName = type.videoFileName {

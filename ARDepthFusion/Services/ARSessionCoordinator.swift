@@ -3,7 +3,7 @@ import Combine
 
 final class ARSessionCoordinator: NSObject, ObservableObject, ARSessionDelegate, @unchecked Sendable {
     @Published var hasLiDAR = false
-    @Published private(set) var latestFrame: ARFrame?
+    private(set) var latestFrame: ARFrame?
 
     nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
         let lidarAvailable = frame.sceneDepth != nil

@@ -30,11 +30,11 @@ struct ContentView: View {
     @State private var capturedCameraTransform: simd_float4x4?
     @State private var detectionElapsedMs: Double = 0
 
-    // Per-detection depth samples (LiDAR-preferred, fused fallback)
-    @State private var depthSamples: [DepthSample?] = []
+    // Per-detection 3D extents (LiDAR-preferred, fused fallback)
+    @State private var objectExtents: [Object3DExtent?] = []
 
-    // Queued effects with pre-computed depth (placed after dismissing results screen)
-    @State private var pendingEffects: [(type: EffectType, detection: DetectedObject, depth: DepthSample)] = []
+    // Queued effects with pre-computed extent (placed after dismissing results screen)
+    @State private var pendingEffects: [(type: EffectType, detection: DetectedObject, extent: Object3DExtent)] = []
 
     var body: some View {
         ZStack {
@@ -77,7 +77,7 @@ struct ContentView: View {
                         effectManager.clearAll()
                         detections = []
                         depthResult = nil
-                        depthSamples = []
+                        objectExtents = []
                         statusText = "Cleared"
                     }
                 )
@@ -147,15 +147,15 @@ struct ContentView: View {
                     imageWidth: imageWidth,
                     imageHeight: imageHeight,
                     elapsedMs: detectionElapsedMs,
-                    depthSamples: depthSamples,
+                    objectExtents: objectExtents,
+                    intrinsics: capturedIntrinsics ?? simd_float3x3(1),
+                    cameraTransform: capturedCameraTransform ?? simd_float4x4(1),
                     onPlaceEffect: { type, detection in
-                        // Look up the pre-computed depth sample for this detection
-                        // so placement uses the same depth the user saw on screen.
                         let idx = detections.firstIndex(where: { $0.id == detection.id })
                         if let idx,
-                           idx < depthSamples.count,
-                           let sample = depthSamples[idx] {
-                            pendingEffects.append((type: type, detection: detection, depth: sample))
+                           idx < objectExtents.count,
+                           let extent = objectExtents[idx] {
+                            pendingEffects.append((type: type, detection: detection, extent: extent))
                             effectManager.preparePlayer(for: type)
                         }
                     }
@@ -229,19 +229,25 @@ struct ContentView: View {
 
             let elapsed = CFAbsoluteTimeGetCurrent() - start
 
-            // Compute per-detection depth: prefer LiDAR, fall back to fused
-            var samples: [DepthSample?] = []
+            // Compute per-detection 3D extent: prefer LiDAR bbox sampling, fall back to fused
+            let intrinsics = capturedIntrinsics ?? simd_float3x3(1)
+            let camTransform = capturedCameraTransform
+            var extents: [Object3DExtent?] = []
             for obj in objects {
-                let sample = sampleDepth(at: obj.centroid,
-                                         lidar: lidarSnapshot,
-                                         fusionResult: fusionResult,
-                                         imageWidth: imgW, imageHeight: imgH)
-                samples.append(sample)
+                let extent = computeObject3DExtent(
+                    detection: obj,
+                    lidar: lidarSnapshot,
+                    fusionResult: fusionResult,
+                    imageWidth: imgW, imageHeight: imgH,
+                    intrinsics: intrinsics,
+                    cameraTransform: camTransform
+                )
+                extents.append(extent)
             }
 
             detections = objects
             depthResult = fusionResult
-            depthSamples = samples
+            objectExtents = extents
             detectionElapsedMs = elapsed * 1000
             isDetecting = false
 
@@ -260,53 +266,252 @@ struct ContentView: View {
                 print("Fusion alpha=\(fusion.alpha) beta=\(fusion.beta) pairs=\(fusion.validPairCount)")
             }
             for (i, obj) in objects.enumerated() {
-                let s = samples[i]
-                let src = s?.isLiDAR == true ? "LiDAR" : "fused"
-                print("  \(obj.className): depth=\(String(format: "%.2f", s?.depth ?? -1))m (\(src))")
+                let e = extents[i]
+                let src = e?.isLiDAR == true ? "LiDAR" : "fused"
+                print("  \(obj.className): depth=\(String(format: "%.2f", e?.medianDepth ?? -1))m (\(src))")
             }
         }
     }
 
-    /// Sample depth at a point: prefer high-confidence LiDAR, fall back to fused depth.
-    private func sampleDepth(
-        at point: CGPoint,
+    /// Compute 3D extent for a detection by sampling LiDAR depths within its bbox.
+    /// Falls back to fused depth if insufficient LiDAR coverage.
+    private func computeObject3DExtent(
+        detection: DetectedObject,
         lidar: LiDARSnapshot?,
         fusionResult: DepthFusionResult?,
-        imageWidth: Int,
-        imageHeight: Int
-    ) -> DepthSample? {
+        imageWidth: Int, imageHeight: Int,
+        intrinsics: simd_float3x3,
+        cameraTransform: simd_float4x4?
+    ) -> Object3DExtent? {
+        let bbox = detection.boundingBox
+        // Bottom of object on screen = bbox.maxX in landscape, center = bbox.midY
+        let bottomCenter = CGPoint(x: bbox.maxX, y: bbox.midY)
+
+        let fx = intrinsics[0][0]
+        let fy = intrinsics[1][1]
+        let cx = intrinsics[2][0]  // column 2, row 0 (principal point x)
+        let cy = intrinsics[2][1]  // column 2, row 1 (principal point y)
+
+        // Try sampling LiDAR depths within the bbox
         if let lidar {
-            let (lidarDepth, confidence) = sampleLiDAR(at: point, lidar: lidar,
-                                                        imageWidth: imageWidth,
-                                                        imageHeight: imageHeight)
-            if let depth = lidarDepth,
-               confidence >= 2,
-               depth > 0.1 && depth < 5.0 && depth.isFinite {
-                return DepthSample(depth: depth, isLiDAR: true)
+            let scaleX = Float(lidar.width) / Float(imageWidth)
+            let scaleY = Float(lidar.height) / Float(imageHeight)
+
+            let lx0 = max(0, Int(Float(bbox.minX) * scaleX))
+            let ly0 = max(0, Int(Float(bbox.minY) * scaleY))
+            let lx1 = min(lidar.width - 1, Int(Float(bbox.maxX) * scaleX))
+            let ly1 = min(lidar.height - 1, Int(Float(bbox.maxY) * scaleY))
+
+            // --- Mask-filtered depth sampling ---
+            let mask = detection.mask
+            let hasMask = mask.map({ !$0.isEmpty }) ?? false
+
+            // Pre-compute LiDAR → proto mask coordinate mapping
+            let protoW = detection.maskWidth
+            let protoH = detection.maskHeight
+            let modelToProto: Float = 4.0
+            let modelW = Float(protoW) * modelToProto
+            let modelH = Float(protoH) * modelToProto
+            let s = min(modelW / Float(imageWidth), modelH / Float(imageHeight))
+            let scaledW = Float(imageWidth) * s
+            let scaledH = Float(imageHeight) * s
+            let protoPadX = (modelW - scaledW) / 2.0 / modelToProto
+            let protoPadY = (modelH - scaledH) / 2.0 / modelToProto
+            let protoContentW = Float(protoW) - 2 * protoPadX
+            let protoContentH = Float(protoH) - 2 * protoPadY
+            let lidarToProtoX = protoContentW / Float(lidar.width)
+            let lidarToProtoY = protoContentH / Float(lidar.height)
+
+            // Bilinear sample mask at floating-point proto coordinates
+            func sampleMask(_ m: [Float], px: Float, py: Float) -> Float {
+                let x0 = max(0, Int(px))
+                let y0 = max(0, Int(py))
+                let x1 = min(x0 + 1, protoW - 1)
+                let y1 = min(y0 + 1, protoH - 1)
+                let fx = max(0, px - Float(x0))
+                let fy = max(0, py - Float(y0))
+                let v00 = m[y0 * protoW + x0]
+                let v10 = m[y0 * protoW + x1]
+                let v01 = m[y1 * protoW + x0]
+                let v11 = m[y1 * protoW + x1]
+                return v00 * (1 - fx) * (1 - fy) + v10 * fx * (1 - fy)
+                     + v01 * (1 - fx) * fy + v11 * fx * fy
+            }
+
+            let bboxLidarPixels = max(0, (lx1 - lx0 + 1) * (ly1 - ly0 + 1))
+            var maskedDepths: [Float] = []
+            var allDepths: [Float] = []
+            // Store LiDAR pixel coords for mask-filtered points (for deferred unprojection)
+            var maskedLidarCoords: [(lx: Int, ly: Int, depth: Float)] = []
+            maskedDepths.reserveCapacity(bboxLidarPixels)
+            allDepths.reserveCapacity(bboxLidarPixels)
+            maskedLidarCoords.reserveCapacity(bboxLidarPixels)
+
+            if lx0 <= lx1 && ly0 <= ly1 {
+            for ly in ly0...ly1 {
+                for lx in lx0...lx1 {
+                    let idx = ly * lidar.width + lx
+                    let conf = lidar.confidenceValues[idx]
+                    let d = lidar.depthValues[idx]
+                    if conf >= 2 && d > 0.1 && d < 4.0 && d.isFinite {
+                        allDepths.append(d)
+                        if hasMask {
+                            let protoX = Float(lx) * lidarToProtoX + protoPadX
+                            let protoY = Float(ly) * lidarToProtoY + protoPadY
+                            if sampleMask(mask!, px: protoX, py: protoY) > 0.5 {
+                                maskedDepths.append(d)
+                                maskedLidarCoords.append((lx: lx, ly: ly, depth: d))
+                            }
+                        }
+                    }
+                }
+            }
+            }
+
+            // Use mask-filtered depths if enough samples, otherwise fall back to bbox-only
+            let useMask = maskedDepths.count >= 3
+            var depths = useMask ? maskedDepths : allDepths
+            print("[DEBUG depth] \(detection.className): maskFiltered=\(maskedDepths.count)/\(allDepths.count) hasMask=\(hasMask) using=\(useMask ? "mask" : "bbox")")
+
+            if depths.count >= 3 {
+                depths.sort()
+                let medianDepth = depths[depths.count / 2]
+                let depthMin = depths[depths.count / 20]
+                let depthMax = depths[depths.count * 19 / 20]
+
+                // Landscape width → portrait height, landscape height → portrait width
+                let worldHeight = Float(bbox.width) * medianDepth / fx
+                let worldWidth = Float(bbox.height) * medianDepth / fy
+
+                // Unproject mask-filtered points within 10-90% depth range to 3D for OBB
+                var pcObbCenter: SIMD3<Float>? = nil
+                var pcObbDims: SIMD3<Float>? = nil
+                var pcObbYaw: Float? = nil
+                if let cam = cameraTransform, useMask {
+                    let p10 = depths[depths.count * 10 / 100]
+                    let p90 = depths[min(depths.count - 1, depths.count * 90 / 100)]
+                    var maskedWorldPoints: [SIMD3<Float>] = []
+                    maskedWorldPoints.reserveCapacity(maskedLidarCoords.count)
+                    for coord in maskedLidarCoords {
+                        if coord.depth >= p10 && coord.depth <= p90 {
+                            let imgX = Float(coord.lx) / scaleX
+                            let imgY = Float(coord.ly) / scaleY
+                            let xCam = (imgX - cx) / fx * coord.depth
+                            let yCam = (imgY - cy) / fy * coord.depth
+                            let zCam = -coord.depth
+                            let wp = cam * SIMD4<Float>(xCam, yCam, zCam, 1.0)
+                            maskedWorldPoints.append(SIMD3(wp.x, wp.y, wp.z))
+                        }
+                    }
+
+                    if maskedWorldPoints.count >= 10 {
+                        let obb = computePointCloudOBB(maskedWorldPoints)
+                        pcObbCenter = obb.center
+                        pcObbDims = obb.dims
+                        pcObbYaw = obb.yaw
+                        print("[DEBUG OBB] \(detection.className): \(maskedWorldPoints.count)/\(maskedLidarCoords.count) pts (p10-p90), PCA yaw=\(String(format: "%.1f", obb.yaw * 180 / .pi))°, center=(\(String(format: "%.3f", obb.center.x)),\(String(format: "%.3f", obb.center.y)),\(String(format: "%.3f", obb.center.z))), dims=(\(String(format: "%.3f", obb.dims.x)),\(String(format: "%.3f", obb.dims.y)),\(String(format: "%.3f", obb.dims.z)))")
+                    } else {
+                        print("[DEBUG OBB] \(detection.className): \(maskedWorldPoints.count) points after depth filter, falling back to 6-point method")
+                    }
+                }
+
+                return Object3DExtent(
+                    bottomCenter: bottomCenter,
+                    medianDepth: medianDepth,
+                    depthMin: depthMin,
+                    depthMax: depthMax,
+                    worldWidth: worldWidth,
+                    worldHeight: worldHeight,
+                    isLiDAR: true,
+                    obbCenter: pcObbCenter,
+                    obbDims: pcObbDims,
+                    obbYaw: pcObbYaw
+                )
             }
         }
-        if let depth = fusionResult?.sampleDepth(at: point) {
-            return DepthSample(depth: depth, isLiDAR: false)
+
+        // Fallback: fused depth at bottom center
+        if let depth = fusionResult?.sampleDepth(at: bottomCenter) {
+            let worldHeight = Float(bbox.width) * depth / fx
+            let worldWidth = Float(bbox.height) * depth / fy
+
+            return Object3DExtent(
+                bottomCenter: bottomCenter,
+                medianDepth: depth,
+                depthMin: depth,
+                depthMax: depth,
+                worldWidth: worldWidth,
+                worldHeight: worldHeight,
+                isLiDAR: false,
+                obbCenter: nil,
+                obbDims: nil,
+                obbYaw: nil
+            )
         }
+
         return nil
     }
 
-    /// Sample LiDAR depth at a camera-image-space point from a pre-copied snapshot.
-    private func sampleLiDAR(
-        at imagePoint: CGPoint,
-        lidar: LiDARSnapshot,
-        imageWidth: Int,
-        imageHeight: Int
-    ) -> (depth: Float?, confidence: UInt8) {
-        let normX = Float(imagePoint.x) / Float(imageWidth)
-        let normY = Float(imagePoint.y) / Float(imageHeight)
-        let lx = min(Int(normX * Float(lidar.width)), lidar.width - 1)
-        let ly = min(Int(normY * Float(lidar.height)), lidar.height - 1)
+    /// Compute a gravity-aligned OBB from a 3D point cloud using PCA on the XZ plane.
+    /// Points should be pre-filtered by depth (10-90%) before calling.
+    /// Returns center, dimensions (width/height/depth in PCA-aligned frame), and yaw angle.
+    private func computePointCloudOBB(_ points: [SIMD3<Float>]) -> (center: SIMD3<Float>, dims: SIMD3<Float>, yaw: Float) {
+        // Step 1: PCA on XZ plane for optimal horizontal alignment
+        let n = Float(points.count)
+        var meanX: Float = 0, meanZ: Float = 0
+        for p in points { meanX += p.x; meanZ += p.z }
+        meanX /= n; meanZ /= n
 
-        guard lx >= 0, ly >= 0 else { return (nil, 0) }
+        var cxx: Float = 0, czz: Float = 0, cxz: Float = 0
+        for p in points {
+            let dx = p.x - meanX
+            let dz = p.z - meanZ
+            cxx += dx * dx
+            czz += dz * dz
+            cxz += dx * dz
+        }
+        cxx /= n; czz /= n; cxz /= n
 
-        let idx = ly * lidar.width + lx
-        return (lidar.depthValues[idx], lidar.confidenceValues[idx])
+        // Angle of principal axis (eigenvector with larger eigenvalue)
+        let yaw = atan2(2 * cxz, cxx - czz) / 2
+
+        // Step 2: Rotate all points into PCA-aligned frame, find min/max on each axis
+        let cosY = cos(-yaw)
+        let sinY = sin(-yaw)
+
+        var minRX: Float = .greatestFiniteMagnitude, maxRX: Float = -.greatestFiniteMagnitude
+        var minY: Float = .greatestFiniteMagnitude, maxY: Float = -.greatestFiniteMagnitude
+        var minRZ: Float = .greatestFiniteMagnitude, maxRZ: Float = -.greatestFiniteMagnitude
+        for p in points {
+            let dx = p.x - meanX
+            let dz = p.z - meanZ
+            let rx = cosY * dx - sinY * dz
+            let rz = sinY * dx + cosY * dz
+            if rx < minRX { minRX = rx }; if rx > maxRX { maxRX = rx }
+            if p.y < minY { minY = p.y }; if p.y > maxY { maxY = p.y }
+            if rz < minRZ { minRZ = rz }; if rz > maxRZ { maxRZ = rz }
+        }
+
+        // Dims with minimum floor of 0.02m per axis
+        let dimX = max(maxRX - minRX, 0.02)
+        let dimY = max(maxY - minY, 0.02)
+        let dimZ = max(maxRZ - minRZ, 0.02)
+
+        // Center in PCA-aligned frame, then rotate back to world
+        let midRX = (minRX + maxRX) / 2
+        let midY = (minY + maxY) / 2
+        let midRZ = (minRZ + maxRZ) / 2
+
+        // Inverse rotation (yaw, not -yaw)
+        let cosYInv = cos(yaw)
+        let sinYInv = sin(yaw)
+        let worldCenterX = cosYInv * midRX - sinYInv * midRZ + meanX
+        let worldCenterZ = sinYInv * midRX + cosYInv * midRZ + meanZ
+
+        let center = SIMD3<Float>(worldCenterX, midY, worldCenterZ)
+        let dims = SIMD3<Float>(dimX, dimY, dimZ)
+
+        return (center, dims, yaw)
     }
 
     /// Place all queued effects after the detection results screen is dismissed.
@@ -321,7 +526,7 @@ struct ContentView: View {
         capturedIntrinsics = nil
         capturedCameraTransform = nil
         depthResult = nil
-        depthSamples = []
+        objectExtents = []
 
         guard !effects.isEmpty,
               let sceneView,
@@ -334,29 +539,103 @@ struct ContentView: View {
         let cx = intrinsics[2][0]  // column 2, row 0 (principal point x)
         let cy = intrinsics[2][1]  // column 2, row 1 (principal point y)
 
-        for (type, detection, depthSample) in effects {
-            // Use the pre-computed depth sample — same value the user saw on screen.
-            let depth = depthSample.depth
+        // Unproject helper: landscape image point at depth → world position
+        func unproj(_ pt: CGPoint, d: Float) -> SIMD3<Float> {
+            let px = (Float(pt.x) - cx) / fx * d
+            let py = (Float(pt.y) - cy) / fy * d
+            let cp = SIMD4<Float>(px, py, -d, 1.0)
+            let wp = cameraTransform * cp
+            return SIMD3(wp.x, wp.y, wp.z)
+        }
 
-            // Inline world position computation (avoids needing ARFrame)
-            let x = (Float(detection.centroid.x) - cx) / fx * depth
-            let y = (Float(detection.centroid.y) - cy) / fy * depth
-            let z = -depth  // Camera looks along -Z in ARKit
-            let cameraPoint = SIMD4<Float>(x, y, z, 1.0)
-            let worldPoint = cameraTransform * cameraPoint
-            let worldPos = SIMD3<Float>(worldPoint.x, worldPoint.y, worldPoint.z)
+        // Camera-yaw-aligned basis (gravity-aligned Y, camera-facing horizontal)
+        let camZ = SIMD3<Float>(cameraTransform.columns.2.x, 0, cameraTransform.columns.2.z)
+        let horizForward = normalize(SIMD3<Float>(-camZ.x, 0, -camZ.z))
+        let up = SIMD3<Float>(0, 1, 0)
+        let right = normalize(cross(horizForward, up))
+        let cameraYaw = atan2(-camZ.x, -camZ.z)
+
+        print("[DEBUG placement] cameraYaw=\(String(format: "%.1f", cameraYaw * 180 / .pi))° camPos=(\(String(format: "%.3f", cameraTransform.columns.3.x)), \(String(format: "%.3f", cameraTransform.columns.3.y)), \(String(format: "%.3f", cameraTransform.columns.3.z)))")
+
+        for (type, detection, extent) in effects {
+            let bbox = detection.boundingBox
+
+            print("[DEBUG placement] \(detection.className): bbox(landscape)=(\(String(format: "%.0f", bbox.minX)),\(String(format: "%.0f", bbox.minY)),\(String(format: "%.0f", bbox.width))x\(String(format: "%.0f", bbox.height)))")
+            print("[DEBUG placement]   medianDepth=\(String(format: "%.3f", extent.medianDepth))m depthMin=\(String(format: "%.3f", extent.depthMin))m depthMax=\(String(format: "%.3f", extent.depthMax))m")
+
+            let effectPos: SIMD3<Float>
+            let boxDimensions: SIMD3<Float>
+            let effectYaw: Float
+
+            if let obbC = extent.obbCenter, let obbD = extent.obbDims, let obbY = extent.obbYaw {
+                // Point-cloud OBB path: use pre-computed OBB directly
+                if type == .debugCube {
+                    effectPos = obbC
+                } else {
+                    // Video effects: bottom-center of OBB
+                    effectPos = obbC - SIMD3<Float>(0, obbD.y / 2, 0)
+                }
+                boxDimensions = obbD
+                // Negate: PCA yaw is angle from +X toward +Z, but SCNNode.eulerAngles.y
+                // rotates local X toward -Z. Negating aligns local X with the PCA axis.
+                effectYaw = -obbY
+
+                print("[DEBUG OBB placement] \(detection.className): using point-cloud OBB, center=(\(String(format: "%.3f", obbC.x)),\(String(format: "%.3f", obbC.y)),\(String(format: "%.3f", obbC.z))), dims=(\(String(format: "%.3f", obbD.x)),\(String(format: "%.3f", obbD.y)),\(String(format: "%.3f", obbD.z))), yaw=\(String(format: "%.1f", obbY * 180 / .pi))°")
+            } else {
+                // Fallback: 6-point unprojection method
+                print("[DEBUG OBB placement] \(detection.className): fallback to 6-point method")
+                let depth = extent.medianDepth
+                let corners2D = [
+                    CGPoint(x: bbox.minX, y: bbox.minY),
+                    CGPoint(x: bbox.maxX, y: bbox.minY),
+                    CGPoint(x: bbox.maxX, y: bbox.maxY),
+                    CGPoint(x: bbox.minX, y: bbox.maxY),
+                ]
+                var worldPoints = corners2D.map { unproj($0, d: depth) }
+                worldPoints.append(unproj(CGPoint(x: bbox.midX, y: bbox.midY), d: extent.depthMin))
+                worldPoints.append(unproj(CGPoint(x: bbox.midX, y: bbox.midY), d: extent.depthMax))
+
+                var minR: Float = .greatestFiniteMagnitude, maxR: Float = -.greatestFiniteMagnitude
+                var minU: Float = .greatestFiniteMagnitude, maxU: Float = -.greatestFiniteMagnitude
+                var minF: Float = .greatestFiniteMagnitude, maxF: Float = -.greatestFiniteMagnitude
+                for (i, p) in worldPoints.enumerated() {
+                    let r = dot(p, right); let u = dot(p, up); let f = dot(p, horizForward)
+                    if i < 4 {
+                        if r < minR { minR = r }; if r > maxR { maxR = r }
+                        if u < minU { minU = u }; if u > maxU { maxU = u }
+                    }
+                    if f < minF { minF = f }; if f > maxF { maxF = f }
+                }
+                let midR = (minR + maxR) / 2
+                let midU = (minU + maxU) / 2
+                let midF = (minF + maxF) / 2
+                let fallbackCenter = right * midR + up * midU + horizForward * midF
+                let fallbackDims = SIMD3<Float>(maxR - minR, maxU - minU, maxF - minF)
+
+                if type == .debugCube {
+                    effectPos = fallbackCenter
+                } else {
+                    effectPos = right * midR + up * minU + horizForward * midF
+                }
+                boxDimensions = fallbackDims
+                effectYaw = cameraYaw
+            }
+
+            print("[DEBUG placement]   effectPos=(\(String(format: "%.3f", effectPos.x)),\(String(format: "%.3f", effectPos.y)),\(String(format: "%.3f", effectPos.z)))")
 
             let scale = calculateEffectScale(
-                boundingBox: detection.boundingBox,
-                depth: depth,
-                intrinsics: intrinsics
+                worldWidth: extent.worldWidth,
+                worldHeight: extent.worldHeight
             )
 
             effectManager.placeEffect(
                 type: type,
                 objectClass: detection.className,
-                at: worldPos,
+                at: effectPos,
                 scale: scale,
+                extent: extent,
+                boxDimensions: boxDimensions,
+                cameraYaw: effectYaw,
                 in: sceneView
             )
 

@@ -185,9 +185,27 @@ sceneView.session.run(config)
 - Looping via `AVPlayerItemDidPlayToEndTime` notification + seek-to-zero
 - `SCNBillboardConstraint` with `freeAxes = [.Y]` (upright, faces camera horizontally)
 - Shared `CVMetalTextureCache` across all nodes (owned by EffectManager, flushed on clearAll)
-- `debugCube` places a 10cm red `SCNBox` (for position verification)
+- `debugCube` places a red `SCNBox` sized and oriented to match the point-cloud OBB
 - Effects are `SCNNode`-based, removed via `removeFromParentNode()` (triggers `stop()`)
 - Depth for placement uses pre-computed `DepthSample` (same value user sees on detection screen)
+
+### 5c. Point-Cloud OBB (Oriented Bounding Box)
+
+The debug cube and 2D wireframe use a PCA-based OBB computed from mask-filtered LiDAR points:
+
+1. **Depth filtering**: Mask-filtered LiDAR depths are sorted; only points within the 10th–90th percentile depth range are unprojected to 3D. This removes background leakage (desk, wall) that would otherwise elongate the point cloud along the camera's viewing direction and confuse PCA.
+
+2. **PCA on XZ plane**: Compute 2×2 covariance matrix of world X,Z coordinates, find principal axis angle via `θ = atan2(2·Cxz, Cxx - Czz) / 2`. This aligns the box with the object's actual horizontal shape (e.g., a laptop's long axis).
+
+3. **Min/max extents**: Rotate all filtered points into the PCA-aligned frame, compute min/max on each axis (rotated-X, Y, rotated-Z) with a 0.02m floor per dimension.
+
+4. **Stored in `Object3DExtent`**: `obbCenter` (world), `obbDims` (width/height/depth in PCA frame), `obbYaw` (radians, angle from +X toward +Z).
+
+5. **Fallback**: If <10 mask-filtered 3D points after depth filtering, OBB fields are nil → falls back to 6-point camera-yaw-aligned method.
+
+**SceneKit yaw convention**: PCA yaw θ means the principal axis points at `(cos θ, 0, sin θ)` in world. `SCNNode.eulerAngles.y = -θ` aligns local X with this direction (SceneKit rotates local X toward −Z for positive angles).
+
+**Consistency**: The wireframe (DetectionResultsView) and debug cube (EffectManager) use identical OBB data. The wireframe constructs axes directly from raw yaw; the debug cube uses negated yaw through SceneKit's euler convention. Both produce the same 8 world-space corners.
 
 ### 5b. VideoEffectNode Actor Isolation (CRITICAL)
 
@@ -323,8 +341,9 @@ func calculateEffectScale(
          ┌─────────────────────────────────┐
          │  processPendingEffects()        │
          │  For each queued effect:        │
-         │  1. Use pre-computed DepthSample│
-         │  2. Unproject centroid → 3D     │
+         │  1. Use point-cloud OBB if      │
+         │     available (PCA-aligned)     │
+         │  2. Else: 6-point fallback      │
          │  3. Calculate scale from bbox   │
          │  4. EffectManager.placeEffect() │
          │     (video effect placement)    │
@@ -481,7 +500,9 @@ func landscapeToPortrait(_ rect: CGRect) -> CGRect {
 - [ ] Bounding boxes + labels align with objects
 - [ ] Distance labels show correct depth values
 - [ ] Tapping object shows effect picker
-- [ ] Debug cube placed at correct 3D world position
+- [ ] Debug cube placed at correct 3D world position (PCA-aligned OBB)
+- [ ] Debug cube wireframe on detection screen matches 3D debug cube orientation
+- [ ] Debug cube aligns with object shape, not camera direction
 - [ ] Video effects load, loop, and position correctly (when .mov files present)
 - [ ] Missing .mov files handled gracefully (effect not shown in picker)
 - [ ] Effect scale matches object size

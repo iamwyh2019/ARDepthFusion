@@ -2,6 +2,7 @@ import SwiftUI
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import Accelerate
+import simd
 
 struct DetectionResultsView: View {
     let capturedCIImage: CIImage
@@ -9,7 +10,9 @@ struct DetectionResultsView: View {
     let imageWidth: CGFloat
     let imageHeight: CGFloat
     let elapsedMs: Double
-    let depthSamples: [DepthSample?]
+    let objectExtents: [Object3DExtent?]
+    let intrinsics: simd_float3x3
+    let cameraTransform: simd_float4x4
     let onPlaceEffect: (EffectType, DetectedObject) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -231,7 +234,7 @@ struct DetectionResultsView: View {
         return CIImage(cgImage: cgMask)
     }
 
-    /// Draw bounding boxes and centered labels directly on the portrait CGImage.
+    /// Draw bounding boxes, centered labels, and 3D wireframe directly on the portrait CGImage.
     /// This guarantees pixel-perfect alignment (no SwiftUI layout ambiguity).
     private func drawAnnotations(on cgImg: CGImage) -> UIImage? {
         let w = CGFloat(cgImg.width)
@@ -254,20 +257,34 @@ struct DetectionResultsView: View {
 
             for (i, detection) in detections.enumerated() {
                 let portRect = landscapeToPortrait(detection.boundingBox)
-                let sample = i < depthSamples.count ? depthSamples[i] : nil
-                let bgColor = (sample?.isLiDAR == true) ? lidarColor : fusedColor
-                let strokeColor = (sample?.isLiDAR == true) ? UIColor.green : UIColor(red: 0.8, green: 0.6, blue: 0.1, alpha: 1.0)
+                let extent = i < objectExtents.count ? objectExtents[i] : nil
+                let bgColor = (extent?.isLiDAR == true) ? lidarColor : fusedColor
+                let strokeColor = (extent?.isLiDAR == true) ? UIColor.green : UIColor(red: 0.8, green: 0.6, blue: 0.1, alpha: 1.0)
 
                 // Bbox
                 uiCtx.setStrokeColor(strokeColor.cgColor)
                 uiCtx.setLineWidth(4)
                 uiCtx.stroke(portRect)
 
+                // 3D wireframe overlay
+                if let extent, extent.isLiDAR {
+                    if extent.obbCenter != nil {
+                        // Point-cloud OBB: always draw
+                        drawWireframe(ctx: uiCtx, bbox: detection.boundingBox, extent: extent)
+                    } else if extent.depthMin < extent.depthMax {
+                        // Fallback 6-point: only if meaningful depth spread
+                        let ratio = extent.depthMin / extent.depthMax
+                        if ratio <= 0.95 {
+                            drawWireframe(ctx: uiCtx, bbox: detection.boundingBox, extent: extent)
+                        }
+                    }
+                }
+
                 // Two-line label: "className 95%" and "2.30 m"
                 let line1 = "\(detection.className) \(Int(detection.confidence * 100))%"
                 let distStr: String
-                if let s = sample {
-                    distStr = String(format: "%.2f m", s.depth)
+                if let e = extent {
+                    distStr = String(format: "%.2f m", e.medianDepth)
                 } else {
                     distStr = "-- m"
                 }
@@ -308,5 +325,134 @@ struct DetectionResultsView: View {
                 attrStr.draw(in: textRect)
             }
         }
+    }
+
+    // MARK: - 3D Wireframe (Gravity-Aligned AABB)
+
+    /// Draw 3D wireframe OBB. Uses pre-computed point-cloud OBB (PCA-aligned) when available,
+    /// otherwise falls back to 6-point camera-yaw-aligned method.
+    private func drawWireframe(ctx: CGContext, bbox: CGRect, extent: Object3DExtent) {
+        // Use pre-computed point-cloud OBB if available, otherwise fall back to 6-point method
+        let obbCorners: [SIMD3<Float>]
+        if let center = extent.obbCenter, let dims = extent.obbDims, let yaw = extent.obbYaw {
+            // 8 corners from PCA-aligned OBB
+            let cosY = cos(yaw), sinY = sin(yaw)
+            let hw = dims.x / 2, hh = dims.y / 2, hd = dims.z / 2
+            // PCA-aligned local axes: X along principal (cos yaw, 0, sin yaw), Y up, Z perpendicular
+            let axisX = SIMD3<Float>(cosY, 0, sinY)
+            let axisY = SIMD3<Float>(0, 1, 0)
+            let axisZ = SIMD3<Float>(-sinY, 0, cosY)
+            obbCorners = [
+                center - axisX * hw - axisY * hh - axisZ * hd, // 0
+                center + axisX * hw - axisY * hh - axisZ * hd, // 1
+                center + axisX * hw - axisY * hh + axisZ * hd, // 2
+                center - axisX * hw - axisY * hh + axisZ * hd, // 3
+                center - axisX * hw + axisY * hh - axisZ * hd, // 4
+                center + axisX * hw + axisY * hh - axisZ * hd, // 5
+                center + axisX * hw + axisY * hh + axisZ * hd, // 6
+                center - axisX * hw + axisY * hh + axisZ * hd, // 7
+            ]
+        } else {
+            // Fallback: 6-point camera-yaw-aligned method
+            let corners2D = [
+                CGPoint(x: bbox.minX, y: bbox.minY),
+                CGPoint(x: bbox.maxX, y: bbox.minY),
+                CGPoint(x: bbox.maxX, y: bbox.maxY),
+                CGPoint(x: bbox.minX, y: bbox.maxY),
+            ]
+            var worldPoints: [SIMD3<Float>] = corners2D.map {
+                unprojectToWorld($0, depth: extent.medianDepth)
+            }
+            let center2D = CGPoint(x: bbox.midX, y: bbox.midY)
+            worldPoints.append(unprojectToWorld(center2D, depth: extent.depthMin))
+            worldPoints.append(unprojectToWorld(center2D, depth: extent.depthMax))
+
+            let camForward3 = SIMD3<Float>(cameraTransform.columns.2.x,
+                                            cameraTransform.columns.2.y,
+                                            cameraTransform.columns.2.z)
+            let horizForward = normalize(SIMD3<Float>(-camForward3.x, 0, -camForward3.z))
+            let up = SIMD3<Float>(0, 1, 0)
+            let right = normalize(cross(horizForward, up))
+
+            var minR: Float = .greatestFiniteMagnitude, maxR: Float = -.greatestFiniteMagnitude
+            var minU: Float = .greatestFiniteMagnitude, maxU: Float = -.greatestFiniteMagnitude
+            var minF: Float = .greatestFiniteMagnitude, maxF: Float = -.greatestFiniteMagnitude
+            for (i, p) in worldPoints.enumerated() {
+                let r = dot(p, right); let u = dot(p, up); let f = dot(p, horizForward)
+                if i < 4 {
+                    minR = min(minR, r); maxR = max(maxR, r)
+                    minU = min(minU, u); maxU = max(maxU, u)
+                }
+                minF = min(minF, f); maxF = max(maxF, f)
+            }
+            obbCorners = [
+                right * minR + up * minU + horizForward * minF,
+                right * maxR + up * minU + horizForward * minF,
+                right * maxR + up * minU + horizForward * maxF,
+                right * minR + up * minU + horizForward * maxF,
+                right * minR + up * maxU + horizForward * minF,
+                right * maxR + up * maxU + horizForward * minF,
+                right * maxR + up * maxU + horizForward * maxF,
+                right * minR + up * maxU + horizForward * maxF,
+            ]
+        }
+
+        // Project to portrait image space
+        let invTransform = cameraTransform.inverse
+        let projected: [CGPoint?] = obbCorners.map { wp in
+            guard let lp = projectToImage(wp, invTransform: invTransform) else { return nil }
+            return CGPoint(x: lp.y, y: lp.x) // landscape → portrait
+        }
+
+        // 12 edges of cuboid
+        let edges = [
+            (0,1), (1,2), (2,3), (3,0), // bottom
+            (4,5), (5,6), (6,7), (7,4), // top
+            (0,4), (1,5), (2,6), (3,7), // vertical
+        ]
+
+        ctx.setStrokeColor(UIColor.cyan.withAlphaComponent(0.6).cgColor)
+        ctx.setLineDash(phase: 0, lengths: [8, 6])
+        ctx.setLineWidth(2)
+
+        for (i, j) in edges {
+            guard let p1 = projected[i], let p2 = projected[j] else { continue }
+            ctx.move(to: p1)
+            ctx.addLine(to: p2)
+        }
+        ctx.strokePath()
+
+        ctx.setLineDash(phase: 0, lengths: [])
+    }
+
+    /// Unproject a landscape image point at a given depth to world space.
+    private func unprojectToWorld(_ imagePoint: CGPoint, depth: Float) -> SIMD3<Float> {
+        let fx = intrinsics[0][0]
+        let fy = intrinsics[1][1]
+        let cx = intrinsics[2][0]
+        let cy = intrinsics[2][1]
+
+        let x = (Float(imagePoint.x) - cx) / fx * depth
+        let y = (Float(imagePoint.y) - cy) / fy * depth
+        let z = -depth
+        let camPt = SIMD4<Float>(x, y, z, 1)
+        let worldPt = cameraTransform * camPt
+        return SIMD3(worldPt.x, worldPt.y, worldPt.z)
+    }
+
+    /// Project a world point back to landscape image coordinates (nil if behind camera).
+    private func projectToImage(_ worldPoint: SIMD3<Float>, invTransform: simd_float4x4? = nil) -> CGPoint? {
+        let inv = invTransform ?? cameraTransform.inverse
+        let camPt = inv * SIMD4<Float>(worldPoint.x, worldPoint.y, worldPoint.z, 1)
+        guard camPt.z < -0.01 else { return nil }
+
+        let fx = intrinsics[0][0]
+        let fy = intrinsics[1][1]
+        let cx = intrinsics[2][0]
+        let cy = intrinsics[2][1]
+
+        let px = fx * (camPt.x / -camPt.z) + cx
+        let py = fy * (camPt.y / -camPt.z) + cy
+        return CGPoint(x: CGFloat(px), y: CGFloat(py))
     }
 }

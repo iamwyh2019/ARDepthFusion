@@ -1,9 +1,20 @@
 import CoreVideo
 import Foundation
+import simd
 
-struct DepthSample {
-    let depth: Float
-    let isLiDAR: Bool
+struct Object3DExtent {
+    let bottomCenter: CGPoint  // Landscape image coords (for unprojection)
+    let medianDepth: Float     // Median LiDAR depth across bbox (meters)
+    let depthMin: Float        // Closest point of object (meters)
+    let depthMax: Float        // Farthest point of object (meters)
+    let worldWidth: Float      // Horizontal extent in portrait (meters)
+    let worldHeight: Float     // Vertical extent in portrait (meters)
+    let isLiDAR: Bool          // True if median from LiDAR, false if fused fallback
+
+    // Point-cloud gravity-aligned OBB (display only — debug cube + effect positioning)
+    let obbCenter: SIMD3<Float>?   // World-space center
+    let obbDims: SIMD3<Float>?     // (width, height, depth) in PCA-aligned frame
+    let obbYaw: Float?             // Y-axis rotation of principal horizontal axis (radians)
 }
 
 /// Snapshot of LiDAR depth + confidence data, copied from ARFrame.sceneDepth.
