@@ -9,6 +9,8 @@ enum EffectType: String, CaseIterable, Identifiable {
     case snow
     case tornado
     case love
+    case aurora
+    case dance
     case debugCube
 
     var id: String { rawValue }
@@ -31,6 +33,8 @@ enum EffectType: String, CaseIterable, Identifiable {
         case .snow: return "snowflake"
         case .tornado: return "tornado"
         case .love: return "heart.fill"
+        case .aurora: return "sparkles"
+        case .dance: return "figure.wave"
         case .debugCube: return "cube.fill"
         }
     }

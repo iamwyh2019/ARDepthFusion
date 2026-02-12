@@ -275,6 +275,26 @@ struct ContentView: View {
 
     /// Compute 3D extent for a detection by sampling LiDAR depths within its bbox.
     /// Falls back to fused depth if insufficient LiDAR coverage.
+    /// Morphological erosion (min-filter) on a proto-resolution mask.
+    private func erodeMask(_ mask: [Float], width: Int, height: Int, radius: Int) -> [Float] {
+        guard radius > 0 else { return mask }
+        var result = [Float](repeating: 0, count: width * height)
+        for y in 0..<height {
+            for x in 0..<width {
+                var minVal: Float = mask[y * width + x]
+                for dy in -radius...radius {
+                    let ny = min(max(y + dy, 0), height - 1)
+                    for dx in -radius...radius {
+                        let nx = min(max(x + dx, 0), width - 1)
+                        minVal = min(minVal, mask[ny * width + nx])
+                    }
+                }
+                result[y * width + x] = minVal
+            }
+        }
+        return result
+    }
+
     private func computeObject3DExtent(
         detection: DetectedObject,
         lidar: LiDARSnapshot?,
@@ -322,6 +342,18 @@ struct ContentView: View {
             let lidarToProtoX = protoContentW / Float(lidar.width)
             let lidarToProtoY = protoContentH / Float(lidar.height)
 
+            // Erosion: 5% of shorter bbox dimension (in image pixels), converted to proto pixels
+            // Clamped to [1, 3]: noise zone is ~1-3 proto pixels regardless of object size
+            let erodedMask: [Float]?
+            if hasMask {
+                let erosionImagePx = 0.05 * min(Float(bbox.width), Float(bbox.height))
+                let imageToProtoScale = protoContentW / Float(imageWidth)
+                let erosionRadius = min(3, max(1, Int(round(erosionImagePx * imageToProtoScale))))
+                erodedMask = erodeMask(mask!, width: protoW, height: protoH, radius: erosionRadius)
+            } else {
+                erodedMask = nil
+            }
+
             // Bilinear sample mask at floating-point proto coordinates
             func sampleMask(_ m: [Float], px: Float, py: Float) -> Float {
                 let x0 = max(0, Int(px))
@@ -358,7 +390,7 @@ struct ContentView: View {
                         if hasMask {
                             let protoX = Float(lx) * lidarToProtoX + protoPadX
                             let protoY = Float(ly) * lidarToProtoY + protoPadY
-                            if sampleMask(mask!, px: protoX, py: protoY) > 0.5 {
+                            if sampleMask(erodedMask!, px: protoX, py: protoY) > 0.5 {
                                 maskedDepths.append(d)
                                 maskedLidarCoords.append((lx: lx, ly: ly, depth: d))
                             }
@@ -388,8 +420,8 @@ struct ContentView: View {
                 var pcObbDims: SIMD3<Float>? = nil
                 var pcObbYaw: Float? = nil
                 if let cam = cameraTransform, useMask {
-                    let p10 = depths[depths.count * 10 / 100]
-                    let p90 = depths[min(depths.count - 1, depths.count * 90 / 100)]
+                    let p10 = depths[depths.count * 5 / 100]
+                    let p90 = depths[min(depths.count - 1, depths.count * 95 / 100)]
                     var maskedWorldPoints: [SIMD3<Float>] = []
                     maskedWorldPoints.reserveCapacity(maskedLidarCoords.count)
                     for coord in maskedLidarCoords {
@@ -572,8 +604,10 @@ struct ContentView: View {
                 if type == .debugCube {
                     effectPos = obbC
                 } else {
-                    // Video effects: bottom-center of OBB
-                    effectPos = obbC - SIMD3<Float>(0, obbD.y / 2, 0)
+                    // Video effects: 2cm above bottom-center of OBB
+                    let bottom = obbC.y - obbD.y / 2
+                    let lift = min(0.02, obbD.y / 2)
+                    effectPos = SIMD3<Float>(obbC.x, bottom + lift, obbC.z)
                 }
                 boxDimensions = obbD
                 // Negate: PCA yaw is angle from +X toward +Z, but SCNNode.eulerAngles.y
@@ -615,7 +649,9 @@ struct ContentView: View {
                 if type == .debugCube {
                     effectPos = fallbackCenter
                 } else {
-                    effectPos = right * midR + up * minU + horizForward * midF
+                    // Video effects: 2cm above bottom-center
+                    let fallbackLift = min(0.02, (maxU - minU) / 2)
+                    effectPos = right * midR + up * (minU + fallbackLift) + horizForward * midF
                 }
                 boxDimensions = fallbackDims
                 effectYaw = cameraYaw

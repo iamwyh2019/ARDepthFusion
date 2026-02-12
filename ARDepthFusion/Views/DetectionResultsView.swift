@@ -134,10 +134,15 @@ struct DetectionResultsView: View {
             kCIInputEVKey: -1.74
         ])
 
-        // Composite: original where mask=white, darkened where mask=black
+        // Brighten masked objects by 1.2x for greater contrast against dimmed background
+        let brightened = original.applyingFilter("CIExposureAdjust", parameters: [
+            kCIInputEVKey: log2(1.2)
+        ])
+
+        // Composite: brightened where mask=white, darkened where mask=black
         let blended: CIImage
         if let maskCI = buildMaskCIImage(originalExtent: original.extent) {
-            blended = original.applyingFilter("CIBlendWithMask", parameters: [
+            blended = brightened.applyingFilter("CIBlendWithMask", parameters: [
                 kCIInputBackgroundImageKey: darkened,
                 kCIInputMaskImageKey: maskCI
             ])
