@@ -136,10 +136,6 @@ nonisolated class VideoEffectNode: SCNNode, @unchecked Sendable {
     }
 
     deinit {
-        updateTimer?.invalidate()
-        if let observer = loopObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
-        player?.pause()
+        stop()
     }
 }

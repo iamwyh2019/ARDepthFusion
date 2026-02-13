@@ -73,6 +73,7 @@ nonisolated func nonMaximumSuppression(
     }
 
     var selected: [BoxPrediction] = []
+    selected.reserveCapacity(min(limit, predictions.count))
     var active = [Bool](repeating: true, count: predictions.count)
     var numActive = active.count
 
@@ -135,16 +136,16 @@ nonisolated func getSigmoidMask(mask: UnsafePointer<Float>, maskSize: Int) -> [F
     var onef: Float = 1.0
     var negOne: Float = -1.0
 
-    var expNegatedMask = [Float](repeating: 0, count: maskSize)
-    vDSP_vsmul(mask, 1, &negOne, &expNegatedMask, 1, vDSP_Length(maskSize))
-    vvexpf(&expNegatedMask, expNegatedMask, &count)
+    var result = [Float](repeating: 0, count: maskSize)
+    vDSP_vsmul(mask, 1, &negOne, &result, 1, vDSP_Length(maskSize))
+    vvexpf(&result, result, &count)
+    vDSP_vsadd(result, 1, &onef, &result, 1, vDSP_Length(maskSize))
+    // vvrecf in-place via withUnsafeMutableBufferPointer to satisfy exclusivity
+    result.withUnsafeMutableBufferPointer { buf in
+        vvrecf(buf.baseAddress!, buf.baseAddress!, &count)
+    }
 
-    vDSP_vsadd(expNegatedMask, 1, &onef, &expNegatedMask, 1, vDSP_Length(maskSize))
-
-    var sigmoidMask = [Float](repeating: 0, count: maskSize)
-    vvrecf(&sigmoidMask, &expNegatedMask, &count)
-
-    return sigmoidMask
+    return result
 }
 
 

@@ -15,12 +15,13 @@ final class EffectManager: ObservableObject {
     private var preparedPlayers: [String: [PreparedPlayer]] = [:]
 
     // Shared Metal texture cache (one for all VideoEffectNodes)
-    private lazy var metalTextureCache: CVMetalTextureCache? = {
-        guard let device = MTLCreateSystemDefaultDevice() else { return nil }
-        var cache: CVMetalTextureCache?
-        CVMetalTextureCacheCreate(nil, nil, device, nil, &cache)
-        return cache
-    }()
+    private var metalTextureCache: CVMetalTextureCache?
+
+    init() {
+        if let device = MTLCreateSystemDefaultDevice() {
+            CVMetalTextureCacheCreate(nil, nil, device, nil, &metalTextureCache)
+        }
+    }
 
     deinit {
         // Clean up all pooled players and their observers

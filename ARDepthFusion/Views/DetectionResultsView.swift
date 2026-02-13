@@ -13,31 +13,60 @@ struct DetectionResultsView: View {
     let objectExtents: [Object3DExtent?]
     let intrinsics: simd_float3x3
     let cameraTransform: simd_float4x4
+    let ciContext: CIContext
+    let lidarSnapshot: LiDARSnapshot?
     let onPlaceEffect: (EffectType, DetectedObject) -> Void
+
+    private enum ViewMode: String, CaseIterable {
+        case effect = "Effect"
+        case debug = "Debug"
+    }
 
     @Environment(\.dismiss) private var dismiss
     @State private var composited: UIImage?
     @State private var selectedDetection: DetectedObject?
     @State private var statusText = ""
+    @State private var viewMode: ViewMode = .effect
+    @State private var debugImage: UIImage?
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if let composited {
-                GeometryReader { geometry in
-                    Image(uiImage: composited)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .clipped()
-                        .contentShape(Rectangle())
-                        .onTapGesture { location in
-                            handleTap(at: location, viewSize: geometry.size,
-                                      imageSize: composited.size)
-                        }
+            switch viewMode {
+            case .effect:
+                if let composited {
+                    GeometryReader { geometry in
+                        Image(uiImage: composited)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                            .clipped()
+                            .contentShape(Rectangle())
+                            .onTapGesture { location in
+                                handleTap(at: location, viewSize: geometry.size,
+                                          imageSize: composited.size)
+                            }
+                    }
+                    .ignoresSafeArea()
                 }
-                .ignoresSafeArea()
+            case .debug:
+                if let debugImage {
+                    GeometryReader { geometry in
+                        Image(uiImage: debugImage)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                            .clipped()
+                    }
+                    .ignoresSafeArea()
+                } else if lidarSnapshot != nil {
+                    ProgressView("Rendering debug view...")
+                        .foregroundStyle(.white)
+                } else {
+                    Text("No LiDAR data available")
+                        .foregroundStyle(.secondary)
+                }
             }
 
             VStack {
@@ -54,6 +83,15 @@ struct DetectionResultsView: View {
                         .background(.ultraThinMaterial, in: Capsule())
                     }
                     Spacer()
+                    if lidarSnapshot != nil {
+                        Picker("View", selection: $viewMode) {
+                            ForEach(ViewMode.allCases, id: \.self) { mode in
+                                Text(mode.rawValue).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 160)
+                    }
                 }
                 .padding(.horizontal)
 
@@ -62,6 +100,15 @@ struct DetectionResultsView: View {
                 if !statusText.isEmpty {
                     Text(statusText)
                         .font(.caption)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
+
+                if viewMode == .debug {
+                    Text("Green = mask edge, Red = eroded edge")
+                        .font(.caption2)
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
@@ -79,6 +126,11 @@ struct DetectionResultsView: View {
         }
         .task {
             composited = buildCompositedImage()
+        }
+        .onChange(of: viewMode) {
+            if viewMode == .debug && debugImage == nil {
+                debugImage = buildDebugImage()
+            }
         }
         .sheet(item: $selectedDetection) { detection in
             EffectPickerView(objectClass: detection.className) { effectType in
@@ -126,7 +178,6 @@ struct DetectionResultsView: View {
     // MARK: - Image Compositing
 
     private func buildCompositedImage() -> UIImage? {
-        let ciContext = CIContext(options: [.useSoftwareRenderer: false])
         let original = capturedCIImage
 
         // CIExposureAdjust preserves hue. EV = log2(0.3) ≈ -1.74 → 0.3x brightness
@@ -194,10 +245,14 @@ struct DetectionResultsView: View {
 
         // Extract content area as float (skip scaleFit padding rows/cols)
         var content = [Float](repeating: 0, count: protoContentW * protoContentH)
-        for y in 0..<protoContentH {
-            for x in 0..<protoContentW {
-                let idx = (y + protoPadY) * protoW + (x + protoPadX)
-                content[y * protoContentW + x] = combined[idx]
+        content.withUnsafeMutableBufferPointer { dst in
+            combined.withUnsafeBufferPointer { src in
+                for y in 0..<protoContentH {
+                    let srcOffset = (y + protoPadY) * protoW + protoPadX
+                    let dstOffset = y * protoContentW
+                    memcpy(dst.baseAddress! + dstOffset, src.baseAddress! + srcOffset,
+                           protoContentW * MemoryLayout<Float>.stride)
+                }
             }
         }
 
@@ -216,11 +271,32 @@ struct DetectionResultsView: View {
         // The mask data is in pixel-buffer coords (Y=0 at top), but the image
         // CIImage (from CGImage round-trip) composites with Y=0 at bottom.
         // Flipping the mask vertically aligns it with the image in CIImage space.
-        var pixels = [UInt8](repeating: 0, count: imgW * imgH)
-        for y in 0..<imgH {
-            let srcY = imgH - 1 - y
-            for x in 0..<imgW {
-                pixels[y * imgW + x] = UInt8(min(max(upsampled[srcY * imgW + x] * 255.0, 0), 255))
+        let pixelCount = imgW * imgH
+
+        // 1. Scale [0,1] → [0,255] using vDSP
+        var scaled = [Float](repeating: 0, count: pixelCount)
+        var scaleFactor: Float = 255.0
+        vDSP_vsmul(upsampled, 1, &scaleFactor, &scaled, 1, vDSP_Length(pixelCount))
+
+        // 2. Clip to [0, 255]
+        var lo: Float = 0, hi: Float = 255
+        vDSP_vclip(scaled, 1, &lo, &hi, &scaled, 1, vDSP_Length(pixelCount))
+
+        // 3. Convert Float → UInt8
+        var pixels = [UInt8](repeating: 0, count: pixelCount)
+        vDSP_vfixu8(scaled, 1, &pixels, 1, vDSP_Length(pixelCount))
+
+        // 4. Flip Y: reverse row order in-place using memcpy row swaps
+        var tempRow = [UInt8](repeating: 0, count: imgW)
+        for y in 0..<(imgH / 2) {
+            let topStart = y * imgW
+            let botStart = (imgH - 1 - y) * imgW
+            tempRow.withUnsafeMutableBufferPointer { tmp in
+                pixels.withUnsafeMutableBufferPointer { pix in
+                    memcpy(tmp.baseAddress!, pix.baseAddress! + topStart, imgW)
+                    memcpy(pix.baseAddress! + topStart, pix.baseAddress! + botStart, imgW)
+                    memcpy(pix.baseAddress! + botStart, tmp.baseAddress!, imgW)
+                }
             }
         }
 
@@ -459,5 +535,199 @@ struct DetectionResultsView: View {
         let px = fx * (camPt.x / -camPt.z) + cx
         let py = fy * (camPt.y / -camPt.z) + cy
         return CGPoint(x: CGFloat(px), y: CGFloat(py))
+    }
+
+    // MARK: - Debug View (LiDAR Depth + Mask Contours)
+
+    /// Build a debug image showing LiDAR depth heatmap with bounding boxes and mask contours
+    /// for all detections. Green contour = original mask edge, Red = eroded mask edge.
+    private func buildDebugImage() -> UIImage? {
+        guard let lidar = lidarSnapshot else { return nil }
+
+        let lw = lidar.width   // typically 256
+        let lh = lidar.height  // typically 192
+
+        // Find depth range for normalization
+        var minDepth: Float = .greatestFiniteMagnitude
+        var maxDepth: Float = 0
+        for i in 0..<(lw * lh) {
+            let d = lidar.depthValues[i]
+            if d > 0.05 && d < 10.0 && d.isFinite {
+                if d < minDepth { minDepth = d }
+                if d > maxDepth { maxDepth = d }
+            }
+        }
+        guard maxDepth > minDepth else { return nil }
+        let depthRange = maxDepth - minDepth
+
+        // Build RGBA pixel buffer (landscape orientation)
+        var rgba = [UInt8](repeating: 0, count: lw * lh * 4)
+        for i in 0..<(lw * lh) {
+            let d = lidar.depthValues[i]
+            let offset = i * 4
+            if d > 0.05 && d < 10.0 && d.isFinite {
+                let norm = (d - minDepth) / depthRange
+                let (r, g, b) = debugDepthToColor(norm)
+                rgba[offset] = r
+                rgba[offset + 1] = g
+                rgba[offset + 2] = b
+            }
+            rgba[offset + 3] = 255
+        }
+
+        let scaleX = Float(lw) / Float(imageWidth)
+        let scaleY = Float(lh) / Float(imageHeight)
+
+        // Draw each detection's bbox and mask contours.
+        // IMPORTANT: YOLO bbox/mask Y is flipped (Y=0 at scene bottom) because
+        // toBGRAData() renders through CIImage which flips Y. LiDAR depth Y=0
+        // is at scene top. We must flip bbox Y when mapping to LiDAR coords.
+        let imgH = Float(imageHeight)
+        for det in detections {
+            let bbox = det.boundingBox
+            let lx0 = max(0, Int(Float(bbox.minX) * scaleX))
+            let ly0 = max(0, Int((imgH - Float(bbox.maxY)) * scaleY))
+            let lx1 = min(lw - 1, Int(Float(bbox.maxX) * scaleX))
+            let ly1 = min(lh - 1, Int((imgH - Float(bbox.minY)) * scaleY))
+
+            // Draw bounding box outline in green
+            debugDrawRect(&rgba, width: lw, height: lh,
+                          x0: lx0, y0: ly0, x1: lx1, y1: ly1,
+                          r: 0, g: 255, b: 0)
+
+            guard let mask = det.mask, !mask.isEmpty else { continue }
+
+            let protoW = det.maskWidth
+            let protoH = det.maskHeight
+
+            // ScaleFit padding (same formula as computeObject3DExtent / buildMaskCIImage)
+            let modelToProto: Float = 4.0
+            let modelW = Float(protoW) * modelToProto
+            let modelH = Float(protoH) * modelToProto
+            let s = min(modelW / Float(imageWidth), modelH / Float(imageHeight))
+            let scaledW = Float(imageWidth) * s
+            let scaledH = Float(imageHeight) * s
+            let protoPadX = (modelW - scaledW) / 2.0 / modelToProto
+            let protoPadY = (modelH - scaledH) / 2.0 / modelToProto
+            let protoContentW = Float(protoW) - 2 * protoPadX
+            let protoContentH = Float(protoH) - 2 * protoPadY
+            let lidarToProtoX = protoContentW / Float(lw)
+            let lidarToProtoY = protoContentH / Float(lh)
+
+            // Compute eroded mask (same parameters as ContentView.computeObject3DExtent)
+            let erosionImagePx = 0.05 * min(Float(bbox.width), Float(bbox.height))
+            let imageToProtoScale = protoContentW / Float(imageWidth)
+            let erosionRadius = min(3, max(1, Int(round(erosionImagePx * imageToProtoScale))))
+            let eroded = erodeMask(mask, width: protoW, height: protoH, radius: erosionRadius)
+
+            guard lx0 <= lx1, ly0 <= ly1 else { continue }
+
+            for ly in ly0...ly1 {
+                for lx in lx0...lx1 {
+                    // Proto mask Y is flipped (YOLO input was Y-flipped by CIContext.render).
+                    // LiDAR ly is Y=0-at-top; convert to flipped Y for proto sampling.
+                    let protoX = Float(lx) * lidarToProtoX + protoPadX
+                    let protoY = Float(lh - 1 - ly) * lidarToProtoY + protoPadY
+
+                    let origVal = debugSampleMask(mask, width: protoW, height: protoH, px: protoX, py: protoY)
+                    let erodVal = debugSampleMask(eroded, width: protoW, height: protoH, px: protoX, py: protoY)
+
+                    // Contour: pixel >= 0.5 with any 4-neighbor < 0.5
+                    let isOrigContour = origVal >= 0.5 && debugIsEdge(
+                        mask, width: protoW, height: protoH, lx: lx, ly: ly, lh: lh,
+                        lidarToProtoX: lidarToProtoX, lidarToProtoY: lidarToProtoY,
+                        protoPadX: protoPadX, protoPadY: protoPadY)
+                    let isErodContour = erodVal >= 0.5 && debugIsEdge(
+                        eroded, width: protoW, height: protoH, lx: lx, ly: ly, lh: lh,
+                        lidarToProtoX: lidarToProtoX, lidarToProtoY: lidarToProtoY,
+                        protoPadX: protoPadX, protoPadY: protoPadY)
+
+                    let offset = (ly * lw + lx) * 4
+                    if isErodContour {
+                        rgba[offset] = 255; rgba[offset + 1] = 50; rgba[offset + 2] = 50
+                    } else if isOrigContour {
+                        rgba[offset] = 50; rgba[offset + 1] = 255; rgba[offset + 2] = 50
+                    }
+                }
+            }
+        }
+
+        // Manual 90° CW rotation to portrait: landscape (lw × lh) → portrait (lh × lw)
+        // Derived from CIImage(cgImage:).oriented(.right).createCGImage chain:
+        //   portrait(px, py) ← landscape(py, lh - 1 - px)
+        // This bypasses CIImage entirely, avoiding all Y-flip confusion.
+        let portW = lh
+        let portH = lw
+        var portraitRgba = [UInt8](repeating: 0, count: portW * portH * 4)
+        for py in 0..<portH {
+            for px in 0..<portW {
+                let lx = py
+                let ly = lh - 1 - px
+                let srcOff = (ly * lw + lx) * 4
+                let dstOff = (py * portW + px) * 4
+                portraitRgba[dstOff]     = rgba[srcOff]
+                portraitRgba[dstOff + 1] = rgba[srcOff + 1]
+                portraitRgba[dstOff + 2] = rgba[srcOff + 2]
+                portraitRgba[dstOff + 3] = rgba[srcOff + 3]
+            }
+        }
+
+        guard let provider = CGDataProvider(data: Data(portraitRgba) as CFData),
+              let cgPortrait = CGImage(
+                  width: portW, height: portH,
+                  bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: portW * 4,
+                  space: CGColorSpaceCreateDeviceRGB(),
+                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                  provider: provider, decode: nil,
+                  shouldInterpolate: false, intent: .defaultIntent
+              ) else { return nil }
+
+        return UIImage(cgImage: cgPortrait)
+    }
+
+    // MARK: - Debug Helpers
+
+    private func debugSampleMask(_ m: [Float], width: Int, height: Int, px: Float, py: Float) -> Float {
+        let x0 = max(0, Int(px))
+        let y0 = max(0, Int(py))
+        let x1 = min(x0 + 1, width - 1)
+        let y1 = min(y0 + 1, height - 1)
+        let fx = max(0, px - Float(x0))
+        let fy = max(0, py - Float(y0))
+        return m[y0 * width + x0] * (1 - fx) * (1 - fy) + m[y0 * width + x1] * fx * (1 - fy)
+             + m[y1 * width + x0] * (1 - fx) * fy + m[y1 * width + x1] * fx * fy
+    }
+
+    private func debugIsEdge(_ mask: [Float], width: Int, height: Int,
+                             lx: Int, ly: Int, lh: Int,
+                             lidarToProtoX: Float, lidarToProtoY: Float,
+                             protoPadX: Float, protoPadY: Float) -> Bool {
+        for (nx, ny) in [(lx - 1, ly), (lx + 1, ly), (lx, ly - 1), (lx, ly + 1)] {
+            let px = Float(nx) * lidarToProtoX + protoPadX
+            let py = Float(lh - 1 - ny) * lidarToProtoY + protoPadY
+            if debugSampleMask(mask, width: width, height: height, px: px, py: py) < 0.5 { return true }
+        }
+        return false
+    }
+
+    private func debugDrawRect(_ rgba: inout [UInt8], width: Int, height: Int,
+                               x0: Int, y0: Int, x1: Int, y1: Int,
+                               r: UInt8, g: UInt8, b: UInt8) {
+        func set(_ px: Int, _ py: Int) {
+            guard px >= 0, px < width, py >= 0, py < height else { return }
+            let o = (py * width + px) * 4
+            rgba[o] = r; rgba[o + 1] = g; rgba[o + 2] = b; rgba[o + 3] = 255
+        }
+        for x in x0...x1 { set(x, y0); set(x, y1) }
+        for y in y0...y1 { set(x0, y); set(x1, y) }
+    }
+
+    /// Map normalized depth [0,1] to a turbo-like heatmap (blue -> cyan -> green -> yellow -> red).
+    private func debugDepthToColor(_ normalized: Float) -> (r: UInt8, g: UInt8, b: UInt8) {
+        let t = max(0, min(1, normalized))
+        let r = UInt8(max(0, min(255, 255 * (1.5 - abs(t - 0.75) * 4))))
+        let g = UInt8(max(0, min(255, 255 * (1.5 - abs(t - 0.5) * 4))))
+        let b = UInt8(max(0, min(255, 255 * (1.5 - abs(t - 0.25) * 4))))
+        return (r, g, b)
     }
 }

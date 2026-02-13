@@ -3,8 +3,34 @@ import SceneKit
 import ARKit
 import CoreImage
 import CoreVideo
+import Accelerate
 
 private let sharedCIContext = CIContext(options: [.useSoftwareRenderer: false])
+
+/// Morphological erosion (min-filter) on a proto-resolution mask using vImage.
+/// All-zero kernel = pure min-filter. kvImageEdgeExtend matches original boundary clamping.
+nonisolated func erodeMask(_ mask: [Float], width: Int, height: Int, radius: Int) -> [Float] {
+    guard radius > 0, mask.count == width * height else { return mask }
+    let kernelSize = 2 * radius + 1
+    let kernel = [Float](repeating: 0, count: kernelSize * kernelSize)
+    var result = [Float](repeating: 0, count: width * height)
+    mask.withUnsafeBufferPointer { srcPtr in
+        result.withUnsafeMutableBufferPointer { dstPtr in
+            var src = vImage_Buffer(data: UnsafeMutableRawPointer(mutating: srcPtr.baseAddress!),
+                                    height: vImagePixelCount(height), width: vImagePixelCount(width),
+                                    rowBytes: width * MemoryLayout<Float>.stride)
+            var dst = vImage_Buffer(data: dstPtr.baseAddress!,
+                                    height: vImagePixelCount(height), width: vImagePixelCount(width),
+                                    rowBytes: width * MemoryLayout<Float>.stride)
+            kernel.withUnsafeBufferPointer { kPtr in
+                _ = vImageErode_PlanarF(&src, &dst, 0, 0, kPtr.baseAddress!,
+                                        vImagePixelCount(kernelSize), vImagePixelCount(kernelSize),
+                                        vImage_Flags(kvImageEdgeExtend))
+            }
+        }
+    }
+    return result
+}
 
 struct ContentView: View {
     @StateObject private var coordinator = ARSessionCoordinator()
@@ -35,6 +61,12 @@ struct ContentView: View {
 
     // Queued effects with pre-computed extent (placed after dismissing results screen)
     @State private var pendingEffects: [(type: EffectType, detection: DetectedObject, extent: Object3DExtent)] = []
+
+    // Detection task handle for cancellation
+    @State private var detectionTask: Task<Void, Never>?
+
+    // LiDAR snapshot for debug panel
+    @State private var storedLidarSnapshot: LiDARSnapshot?
 
     var body: some View {
         ZStack {
@@ -150,6 +182,8 @@ struct ContentView: View {
                     objectExtents: objectExtents,
                     intrinsics: capturedIntrinsics ?? simd_float3x3(1),
                     cameraTransform: capturedCameraTransform ?? simd_float4x4(1),
+                    ciContext: sharedCIContext,
+                    lidarSnapshot: storedLidarSnapshot,
                     onPlaceEffect: { type, detection in
                         let idx = detections.firstIndex(where: { $0.id == detection.id })
                         if let idx,
@@ -171,6 +205,7 @@ struct ContentView: View {
             return
         }
 
+        detectionTask?.cancel()
         isDetecting = true
         statusText = "Detecting..."
         detections = []
@@ -195,9 +230,10 @@ struct ContentView: View {
         let lidarSnapshot = frame.sceneDepth.flatMap {
             LiDARSnapshot(depthMap: $0.depthMap, confidenceMap: $0.confidenceMap)
         }
+        storedLidarSnapshot = lidarSnapshot
         // frame is no longer needed — Swift releases it at end of scope
 
-        Task {
+        detectionTask = Task {
             let start = CFAbsoluteTimeGetCurrent()
 
             async let yoloResult: [DetectedObject] = {
@@ -262,6 +298,7 @@ struct ContentView: View {
                 showDetectionResults = true
             }
 
+            #if DEBUG
             if let fusion = fusionResult {
                 print("Fusion alpha=\(fusion.alpha) beta=\(fusion.beta) pairs=\(fusion.validPairCount)")
             }
@@ -270,31 +307,12 @@ struct ContentView: View {
                 let src = e?.isLiDAR == true ? "LiDAR" : "fused"
                 print("  \(obj.className): depth=\(String(format: "%.2f", e?.medianDepth ?? -1))m (\(src))")
             }
+            #endif
         }
     }
 
     /// Compute 3D extent for a detection by sampling LiDAR depths within its bbox.
     /// Falls back to fused depth if insufficient LiDAR coverage.
-    /// Morphological erosion (min-filter) on a proto-resolution mask.
-    private func erodeMask(_ mask: [Float], width: Int, height: Int, radius: Int) -> [Float] {
-        guard radius > 0 else { return mask }
-        var result = [Float](repeating: 0, count: width * height)
-        for y in 0..<height {
-            for x in 0..<width {
-                var minVal: Float = mask[y * width + x]
-                for dy in -radius...radius {
-                    let ny = min(max(y + dy, 0), height - 1)
-                    for dx in -radius...radius {
-                        let nx = min(max(x + dx, 0), width - 1)
-                        minVal = min(minVal, mask[ny * width + nx])
-                    }
-                }
-                result[y * width + x] = minVal
-            }
-        }
-        return result
-    }
-
     private func computeObject3DExtent(
         detection: DetectedObject,
         lidar: LiDARSnapshot?,
@@ -403,7 +421,9 @@ struct ContentView: View {
             // Use mask-filtered depths if enough samples, otherwise fall back to bbox-only
             let useMask = maskedDepths.count >= 3
             var depths = useMask ? maskedDepths : allDepths
+            #if DEBUG
             print("[DEBUG depth] \(detection.className): maskFiltered=\(maskedDepths.count)/\(allDepths.count) hasMask=\(hasMask) using=\(useMask ? "mask" : "bbox")")
+            #endif
 
             if depths.count >= 3 {
                 depths.sort()
@@ -441,9 +461,13 @@ struct ContentView: View {
                         pcObbCenter = obb.center
                         pcObbDims = obb.dims
                         pcObbYaw = obb.yaw
+                        #if DEBUG
                         print("[DEBUG OBB] \(detection.className): \(maskedWorldPoints.count)/\(maskedLidarCoords.count) pts (p10-p90), PCA yaw=\(String(format: "%.1f", obb.yaw * 180 / .pi))°, center=(\(String(format: "%.3f", obb.center.x)),\(String(format: "%.3f", obb.center.y)),\(String(format: "%.3f", obb.center.z))), dims=(\(String(format: "%.3f", obb.dims.x)),\(String(format: "%.3f", obb.dims.y)),\(String(format: "%.3f", obb.dims.z)))")
+                        #endif
                     } else {
+                        #if DEBUG
                         print("[DEBUG OBB] \(detection.className): \(maskedWorldPoints.count) points after depth filter, falling back to 6-point method")
+                        #endif
                     }
                 }
 
@@ -488,19 +512,21 @@ struct ContentView: View {
     /// Points should be pre-filtered by depth (10-90%) before calling.
     /// Returns center, dimensions (width/height/depth in PCA-aligned frame), and yaw angle.
     private func computePointCloudOBB(_ points: [SIMD3<Float>]) -> (center: SIMD3<Float>, dims: SIMD3<Float>, yaw: Float) {
-        // Step 1: PCA on XZ plane for optimal horizontal alignment
+        // Step 1: PCA on XZ plane — single-pass Welford's algorithm for mean + covariance
         let n = Float(points.count)
         var meanX: Float = 0, meanZ: Float = 0
-        for p in points { meanX += p.x; meanZ += p.z }
-        meanX /= n; meanZ /= n
-
         var cxx: Float = 0, czz: Float = 0, cxz: Float = 0
-        for p in points {
-            let dx = p.x - meanX
-            let dz = p.z - meanZ
-            cxx += dx * dx
-            czz += dz * dz
-            cxz += dx * dz
+        for (i, p) in points.enumerated() {
+            let k = Float(i + 1)
+            let dxOld = p.x - meanX
+            let dzOld = p.z - meanZ
+            meanX += dxOld / k
+            meanZ += dzOld / k
+            let dxNew = p.x - meanX
+            let dzNew = p.z - meanZ
+            cxx += dxOld * dxNew
+            czz += dzOld * dzNew
+            cxz += dxOld * dzNew
         }
         cxx /= n; czz /= n; cxz /= n
 
@@ -559,6 +585,8 @@ struct ContentView: View {
         capturedCameraTransform = nil
         depthResult = nil
         objectExtents = []
+        storedLidarSnapshot = nil
+        sharedCIContext.clearCaches()
 
         guard !effects.isEmpty,
               let sceneView,
@@ -587,13 +615,17 @@ struct ContentView: View {
         let right = normalize(cross(horizForward, up))
         let cameraYaw = atan2(-camZ.x, -camZ.z)
 
+        #if DEBUG
         print("[DEBUG placement] cameraYaw=\(String(format: "%.1f", cameraYaw * 180 / .pi))° camPos=(\(String(format: "%.3f", cameraTransform.columns.3.x)), \(String(format: "%.3f", cameraTransform.columns.3.y)), \(String(format: "%.3f", cameraTransform.columns.3.z)))")
+        #endif
 
         for (type, detection, extent) in effects {
             let bbox = detection.boundingBox
 
+            #if DEBUG
             print("[DEBUG placement] \(detection.className): bbox(landscape)=(\(String(format: "%.0f", bbox.minX)),\(String(format: "%.0f", bbox.minY)),\(String(format: "%.0f", bbox.width))x\(String(format: "%.0f", bbox.height)))")
             print("[DEBUG placement]   medianDepth=\(String(format: "%.3f", extent.medianDepth))m depthMin=\(String(format: "%.3f", extent.depthMin))m depthMax=\(String(format: "%.3f", extent.depthMax))m")
+            #endif
 
             let effectPos: SIMD3<Float>
             let boxDimensions: SIMD3<Float>
@@ -614,10 +646,14 @@ struct ContentView: View {
                 // rotates local X toward -Z. Negating aligns local X with the PCA axis.
                 effectYaw = -obbY
 
+                #if DEBUG
                 print("[DEBUG OBB placement] \(detection.className): using point-cloud OBB, center=(\(String(format: "%.3f", obbC.x)),\(String(format: "%.3f", obbC.y)),\(String(format: "%.3f", obbC.z))), dims=(\(String(format: "%.3f", obbD.x)),\(String(format: "%.3f", obbD.y)),\(String(format: "%.3f", obbD.z))), yaw=\(String(format: "%.1f", obbY * 180 / .pi))°")
+                #endif
             } else {
                 // Fallback: 6-point unprojection method
+                #if DEBUG
                 print("[DEBUG OBB placement] \(detection.className): fallback to 6-point method")
+                #endif
                 let depth = extent.medianDepth
                 let corners2D = [
                     CGPoint(x: bbox.minX, y: bbox.minY),
@@ -657,7 +693,9 @@ struct ContentView: View {
                 effectYaw = cameraYaw
             }
 
+            #if DEBUG
             print("[DEBUG placement]   effectPos=(\(String(format: "%.3f", effectPos.x)),\(String(format: "%.3f", effectPos.y)),\(String(format: "%.3f", effectPos.z)))")
+            #endif
 
             let scale = calculateEffectScale(
                 worldWidth: extent.worldWidth,

@@ -133,37 +133,35 @@ final class DepthEstimator: @unchecked Sendable {
         switch pixelFormat {
         case kCVPixelFormatType_DepthFloat32:
             for y in 0..<h {
-                let rowPtr = baseAddress.advanced(by: y * bytesPerRow)
-                    .assumingMemoryBound(to: Float32.self)
-                for x in 0..<w {
-                    values[y * w + x] = rowPtr[x]
-                }
+                memcpy(&values[y * w], baseAddress.advanced(by: y * bytesPerRow),
+                       w * MemoryLayout<Float>.stride)
             }
         case kCVPixelFormatType_OneComponent16Half:
             for y in 0..<h {
-                let rowPtr = baseAddress.advanced(by: y * bytesPerRow)
-                    .assumingMemoryBound(to: UInt16.self)
-                for x in 0..<w {
-                    values[y * w + x] = float16ToFloat32(rowPtr[x])
+                var srcBuf = vImage_Buffer(
+                    data: UnsafeMutableRawPointer(mutating: baseAddress.advanced(by: y * bytesPerRow)),
+                    height: 1, width: vImagePixelCount(w), rowBytes: w * 2)
+                values.withUnsafeMutableBufferPointer { buf in
+                    var dstBuf = vImage_Buffer(
+                        data: UnsafeMutableRawPointer(buf.baseAddress! + y * w),
+                        height: 1, width: vImagePixelCount(w), rowBytes: w * 4)
+                    vImageConvert_Planar16FtoPlanarF(&srcBuf, &dstBuf, 0)
                 }
             }
         case kCVPixelFormatType_OneComponent8:
             for y in 0..<h {
                 let rowPtr = baseAddress.advanced(by: y * bytesPerRow)
                     .assumingMemoryBound(to: UInt8.self)
-                for x in 0..<w {
-                    values[y * w + x] = Float(rowPtr[x]) / 255.0
-                }
+                vDSP_vfltu8(rowPtr, 1, &values[y * w], 1, vDSP_Length(w))
             }
+            var divisor: Float = 255.0
+            vDSP_vsdiv(values, 1, &divisor, &values, 1, vDSP_Length(w * h))
         default:
             let totalFloats = bytesPerRow * h / MemoryLayout<Float32>.size
             if totalFloats >= w * h {
                 for y in 0..<h {
-                    let rowPtr = baseAddress.advanced(by: y * bytesPerRow)
-                        .assumingMemoryBound(to: Float32.self)
-                    for x in 0..<w {
-                        values[y * w + x] = rowPtr[x]
-                    }
+                    memcpy(&values[y * w], baseAddress.advanced(by: y * bytesPerRow),
+                           w * MemoryLayout<Float>.stride)
                 }
             } else {
                 print("Unsupported depth pixel format: \(pixelFormat)")
@@ -172,23 +170,5 @@ final class DepthEstimator: @unchecked Sendable {
         }
 
         return DepthMapData(values: values, width: w, height: h)
-    }
-
-    private nonisolated func float16ToFloat32(_ h: UInt16) -> Float {
-        var f16 = h
-        var f32: Float = 0
-        withUnsafePointer(to: &f16) { src in
-            withUnsafeMutablePointer(to: &f32) { dst in
-                var srcBuf = vImage_Buffer(
-                    data: UnsafeMutablePointer(mutating: src),
-                    height: 1, width: 1, rowBytes: 2
-                )
-                var dstBuf = vImage_Buffer(
-                    data: dst, height: 1, width: 1, rowBytes: 4
-                )
-                vImageConvert_Planar16FtoPlanarF(&srcBuf, &dstBuf, 0)
-            }
-        }
-        return f32
     }
 }
