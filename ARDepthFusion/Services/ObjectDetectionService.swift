@@ -39,7 +39,7 @@ final class ObjectDetectionService: ObservableObject, @unchecked Sendable {
         let success = await Task.detached(priority: .userInitiated) {
             InitializeYOLO(
                 modelName: "yolo11l-seg",
-                confidenceThreshold: 0.65,
+                confidenceThreshold: 0.75,
                 iouThreshold: 0.5,
                 scaleMethod: "scaleFit"
             )

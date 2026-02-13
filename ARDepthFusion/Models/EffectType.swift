@@ -11,7 +11,9 @@ enum EffectType: String, CaseIterable, Identifiable {
     case love
     case aurora
     case dance
+    case confetti
     case debugCube
+    case debugMesh
 
     var id: String { rawValue }
 
@@ -19,6 +21,7 @@ enum EffectType: String, CaseIterable, Identifiable {
         switch self {
         case .flamethrower: return "Flamethrower"
         case .debugCube: return "Debug Cube"
+        case .debugMesh: return "Debug Mesh"
         default: return rawValue.capitalized
         }
     }
@@ -35,7 +38,9 @@ enum EffectType: String, CaseIterable, Identifiable {
         case .love: return "heart.fill"
         case .aurora: return "sparkles"
         case .dance: return "figure.wave"
+        case .confetti: return "party.popper.fill"
         case .debugCube: return "cube.fill"
+        case .debugMesh: return "circle.grid.3x3.fill"
         }
     }
 
@@ -43,13 +48,14 @@ enum EffectType: String, CaseIterable, Identifiable {
     var videoFileName: String? {
         switch self {
         case .debugCube: return nil
+        case .debugMesh: return nil
         default: return rawValue
         }
     }
 
     /// Whether this effect's resources are available in the bundle.
     var isAvailable: Bool {
-        if self == .debugCube { return true }
+        if self == .debugCube || self == .debugMesh { return true }
         guard let fileName = videoFileName else { return false }
         return Bundle.main.url(forResource: fileName, withExtension: "mov") != nil
     }

@@ -15,6 +15,9 @@ struct Object3DExtent {
     let obbCenter: SIMD3<Float>?   // World-space center
     let obbDims: SIMD3<Float>?     // (width, height, depth) in PCA-aligned frame
     let obbYaw: Float?             // Y-axis rotation of principal horizontal axis (radians)
+
+    // Filtered 3D world points used for OBB computation (for debug mesh visualization)
+    let obbPoints: [SIMD3<Float>]?
 }
 
 /// Snapshot of LiDAR depth + confidence data, copied from ARFrame.sceneDepth.

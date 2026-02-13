@@ -35,8 +35,8 @@ A real-time AR iOS app that detects objects and places pre-rendered video effect
 | Effect management | Can delete individual effects |
 | Save feature | Not needed |
 | Object detection | **Integrated YOLO source** (yolo11l-seg with segmentation masks) |
-| Confidence threshold | 0.65 |
-| Effect types | Explosion, Flamethrower, Smoke, Lightning, Magic, Snow, Tornado, Love, Debug Cube (9 types) |
+| Confidence threshold | 0.75 |
+| Effect types | Explosion, Flamethrower, Smoke, Lightning, Magic, Snow, Tornado, Love, Aurora, Dance, Confetti, Debug Cube, Debug Mesh (13 types) |
 | UI Language | English |
 | ML Compute Units | **CPU + Neural Engine only** (GPU reserved for SceneKit rendering) |
 
@@ -66,13 +66,13 @@ ARDepthFusion/
 │   ├── DetectedObject.swift             # Detection result (bbox, class, mask, centroid)
 │   ├── DepthFusionResult.swift          # Fused depth map model
 │   ├── PlacedEffect.swift               # Placed effect tracking (SCNNode)
-│   └── EffectType.swift                 # Effect type enum (9 types incl. debugCube)
+│   └── EffectType.swift                 # Effect type enum (13 types incl. debugCube/debugMesh)
 │
 ├── Services/
 │   ├── ObjectDetectionService.swift     # YOLO wrapper (C ABI bridge)
 │   ├── DepthEstimator.swift             # Depth Anything CoreML inference
 │   ├── DepthFusion.swift                # LiDAR + Depth Anything fusion
-│   ├── EffectManager.swift              # Manage placed effects (video + debug cube)
+│   ├── EffectManager.swift              # Manage placed effects (video + debug cube/mesh)
 │   └── VideoEffectNode.swift            # SCNNode subclass: AVPlayer + Metal texture billboard
 │
 ├── Views/
@@ -117,7 +117,7 @@ config.computeUnits = .cpuAndNeuralEngine  // NOT .all, NOT .cpuAndGPU
 
 YOLO is integrated via source code in `ARDepthFusion/YOLO/` with a C ABI bridge to `YOLOUnity.framework`:
 - Model: `yolo11l-seg` (segmentation variant with instance masks)
-- Confidence threshold: 0.65, IOU threshold: 0.5
+- Confidence threshold: 0.75, IOU threshold: 0.5
 - Returns per-detection: bounding box, class, confidence, centroid, segmentation mask
 - Masks are smooth sigmoid values [0,1] at proto resolution (160x120), cropped to bbox
 - Model files use hyphens (`yolo11l-seg`), but API expects underscores (`yolo11l_seg`)
@@ -175,7 +175,7 @@ sceneView.session.run(config)
 
 ### 5. Video Effects (SceneKit)
 
-9 effect types: explosion, flamethrower, smoke, lightning, magic, snow, tornado, love, debugCube.
+13 effect types: explosion, flamethrower, smoke, lightning, magic, snow, tornado, love, aurora, dance, confetti, debugCube, debugMesh.
 
 - Pre-rendered .mov videos (HEVC with alpha) rendered on `SCNPlane` billboards
 - `AVPlayerItemVideoOutput` + `CVMetalTextureCache` pipeline for per-frame texture updates
@@ -186,6 +186,7 @@ sceneView.session.run(config)
 - `SCNBillboardConstraint` with `freeAxes = [.Y]` (upright, faces camera horizontally)
 - Shared `CVMetalTextureCache` across all nodes (owned by EffectManager, flushed on clearAll)
 - `debugCube` places a red `SCNBox` sized and oriented to match the point-cloud OBB
+- `debugMesh` places yellow 5mm `SCNSphere` dots at each mask-filtered, depth-filtered LiDAR world point (for verifying unprojection correctness)
 - Effects are `SCNNode`-based, removed via `removeFromParentNode()` (triggers `stop()`)
 - Depth for placement uses pre-computed `DepthSample` (same value user sees on detection screen)
 
@@ -199,9 +200,9 @@ The debug cube and 2D wireframe use a PCA-based OBB computed from mask-filtered 
 
 3. **Min/max extents**: Rotate all filtered points into the PCA-aligned frame, compute min/max on each axis (rotated-X, Y, rotated-Z) with a 0.02m floor per dimension.
 
-4. **Stored in `Object3DExtent`**: `obbCenter` (world), `obbDims` (width/height/depth in PCA frame), `obbYaw` (radians, angle from +X toward +Z).
+4. **Stored in `Object3DExtent`**: `obbCenter` (world), `obbDims` (width/height/depth in PCA frame), `obbYaw` (radians, angle from +X toward +Z), `obbPoints` (filtered 3D world points, used by debug mesh).
 
-5. **Fallback**: If <10 mask-filtered 3D points after depth filtering, OBB fields are nil → falls back to 6-point camera-yaw-aligned method.
+5. **Fallback**: If <10 mask-filtered 3D points after depth filtering, OBB fields are nil → falls back to 6-point camera-yaw-aligned method. `obbPoints` is still stored even with <10 points (debug mesh can still visualize sparse clouds).
 
 **SceneKit yaw convention**: PCA yaw θ means the principal axis points at `(cos θ, 0, sin θ)` in world. `SCNNode.eulerAngles.y = -θ` aligns local X with this direction (SceneKit rotates local X toward −Z for positive angles).
 
@@ -443,7 +444,7 @@ huggingface-cli download \
 ### ⚠️ YOLO Integration
 - Model: `yolo11l-seg` (segmentation with instance masks)
 - C ABI bridge via `YOLOUnity.framework` + Swift source in `YOLO/`
-- Confidence threshold: 0.65, IOU: 0.5
+- Confidence threshold: 0.75, IOU: 0.5
 - Masks: smooth sigmoid [0,1] at proto resolution (160x120), cropped to bbox
 - Model file uses hyphens (`yolo11l-seg`), API expects underscores (`yolo11l_seg`)
 
@@ -480,6 +481,32 @@ func landscapeToPortrait(_ rect: CGRect) -> CGRect {
 
 **Mask Y-flip**: Mask pixel data is in pixel-buffer coords (Y=0 at top), but `CIImage(cgImage:)` composites with Y=0 at bottom. Must flip vertically when converting mask float→UInt8 for CGImage creation.
 
+### ⚠️ Y-Flip Convention in `computeObject3DExtent` (HARD-WON LESSON)
+
+Three separate Y-flips are required when mapping between YOLO bbox coords, LiDAR buffer coords, proto mask coords, and ARKit intrinsics. Missing any one causes subtle bugs (wrong depth sampling, lateral offset in 3D placement). These were discovered through iterative debugging with the debug mesh visualization.
+
+| Step | From | To | Why flip? |
+|------|------|----|-----------|
+| **Bbox Y → LiDAR Y** | CIImage (Y=0 bottom) | Buffer (Y=0 top) | `toBGRAData()` renders through CIImage which flips Y. YOLO bbox Y is therefore CIImage convention. LiDAR buffer Y=0 is at scene top. |
+| **LiDAR Y → Proto mask Y** | Buffer (Y=0 top) | CIImage (Y=0 bottom) | YOLO input was Y-flipped by CIContext.render, so the proto mask has Y=0 at bottom. Must flip LiDAR ly before sampling the mask. |
+| **LiDAR Y → Image Y for unprojection** | Buffer (Y=0 top) | CIImage (Y=0 bottom) | ARKit intrinsics (cx, cy, fx, fy) project/unproject in CIImage convention. Using buffer-convention Y causes lateral shift in portrait (landscape Y → portrait X). |
+
+```swift
+// Bbox → LiDAR (flip Y):
+let ly0 = max(0, Int((imgH - Float(bbox.maxY)) * scaleY))
+let ly1 = min(lidar.height - 1, Int((imgH - Float(bbox.minY)) * scaleY))
+
+// LiDAR → Proto mask (flip Y):
+let protoY = Float(lidar.height - 1 - ly) * lidarToProtoY + protoPadY
+
+// LiDAR → Image for unprojection (flip Y):
+let imgY = imgH - Float(coord.ly) / scaleY
+```
+
+**Reference implementation**: `DetectionResultsView.buildDebugImage()` already had the first two flips correct (lines ~583-591, ~630). The unprojection flip matches `DetectionResultsView.unprojectToWorld()` which receives CIImage-convention coords.
+
+**Diagnostic trick**: The debug mesh effect (yellow dots at LiDAR world points) makes coordinate bugs immediately visible — dots should overlap the detected object. Depth errors → dots lie flat on wrong surface. Lateral errors → dots shifted sideways.
+
 ### ⚠️ Depth Fusion
 - **DO NOT upsample LiDAR**
 - Sample Depth Anything at LiDAR pixel locations
@@ -503,6 +530,7 @@ func landscapeToPortrait(_ rect: CGRect) -> CGRect {
 - [ ] Debug cube placed at correct 3D world position (PCA-aligned OBB)
 - [ ] Debug cube wireframe on detection screen matches 3D debug cube orientation
 - [ ] Debug cube aligns with object shape, not camera direction
+- [ ] Debug mesh dots overlap the detected object (not shifted or on wrong surface)
 - [ ] Video effects load, loop, and position correctly (when .mov files present)
 - [ ] Missing .mov files handled gracefully (effect not shown in picker)
 - [ ] Effect scale matches object size

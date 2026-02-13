@@ -381,10 +381,14 @@ struct ContentView: View {
             let scaleX = Float(lidar.width) / Float(imageWidth)
             let scaleY = Float(lidar.height) / Float(imageHeight)
 
+            // YOLO bbox Y is in CIImage convention (Y=0 at bottom) because
+            // toBGRAData() renders through CIImage which flips Y. LiDAR depth Y=0
+            // is at scene top. Flip bbox Y when mapping to LiDAR coords.
+            let imgH = Float(imageHeight)
             let lx0 = max(0, Int(Float(bbox.minX) * scaleX))
-            let ly0 = max(0, Int(Float(bbox.minY) * scaleY))
+            let ly0 = max(0, Int((imgH - Float(bbox.maxY)) * scaleY))
             let lx1 = min(lidar.width - 1, Int(Float(bbox.maxX) * scaleX))
-            let ly1 = min(lidar.height - 1, Int(Float(bbox.maxY) * scaleY))
+            let ly1 = min(lidar.height - 1, Int((imgH - Float(bbox.minY)) * scaleY))
 
             // --- Mask-filtered depth sampling ---
             let mask = detection.mask
@@ -453,7 +457,9 @@ struct ContentView: View {
                         allDepths.append(d)
                         if hasMask {
                             let protoX = Float(lx) * lidarToProtoX + protoPadX
-                            let protoY = Float(ly) * lidarToProtoY + protoPadY
+                            // Proto mask Y is flipped (YOLO input was Y-flipped by CIContext.render).
+                            // LiDAR ly is Y=0-at-top; flip to match mask's Y=0-at-bottom convention.
+                            let protoY = Float(lidar.height - 1 - ly) * lidarToProtoY + protoPadY
                             if sampleMask(erodedMask!, px: protoX, py: protoY) > 0.5 {
                                 maskedDepths.append(d)
                                 maskedLidarCoords.append((lx: lx, ly: ly, depth: d))
@@ -485,6 +491,7 @@ struct ContentView: View {
                 var pcObbCenter: SIMD3<Float>? = nil
                 var pcObbDims: SIMD3<Float>? = nil
                 var pcObbYaw: Float? = nil
+                var pcObbPoints: [SIMD3<Float>]? = nil
                 if let cam = cameraTransform, useMask {
                     let p10 = depths[depths.count * 5 / 100]
                     let p90 = depths[min(depths.count - 1, depths.count * 95 / 100)]
@@ -493,7 +500,9 @@ struct ContentView: View {
                     for coord in maskedLidarCoords {
                         if coord.depth >= p10 && coord.depth <= p90 {
                             let imgX = Float(coord.lx) / scaleX
-                            let imgY = Float(coord.ly) / scaleY
+                            // LiDAR buffer Y=0 is at top, but ARKit intrinsics
+                            // use CIImage convention (Y=0 at bottom). Flip Y.
+                            let imgY = imgH - Float(coord.ly) / scaleY
                             let xCam = (imgX - cx) / fx * coord.depth
                             let yCam = (imgY - cy) / fy * coord.depth
                             let zCam = -coord.depth
@@ -501,6 +510,8 @@ struct ContentView: View {
                             maskedWorldPoints.append(SIMD3(wp.x, wp.y, wp.z))
                         }
                     }
+
+                    pcObbPoints = maskedWorldPoints
 
                     if maskedWorldPoints.count >= 10 {
                         let obb = computePointCloudOBB(maskedWorldPoints)
@@ -527,7 +538,8 @@ struct ContentView: View {
                     isLiDAR: true,
                     obbCenter: pcObbCenter,
                     obbDims: pcObbDims,
-                    obbYaw: pcObbYaw
+                    obbYaw: pcObbYaw,
+                    obbPoints: pcObbPoints
                 )
             }
         }
@@ -547,7 +559,8 @@ struct ContentView: View {
                 isLiDAR: false,
                 obbCenter: nil,
                 obbDims: nil,
-                obbYaw: nil
+                obbYaw: nil,
+                obbPoints: nil
             )
         }
 
@@ -756,6 +769,7 @@ struct ContentView: View {
                 extent: extent,
                 boxDimensions: boxDimensions,
                 cameraYaw: effectYaw,
+                worldPoints: extent.obbPoints,
                 in: sceneView
             )
 

@@ -104,6 +104,7 @@ final class EffectManager: ObservableObject {
         extent: Object3DExtent? = nil,
         boxDimensions: SIMD3<Float>? = nil,
         cameraYaw: Float? = nil,
+        worldPoints: [SIMD3<Float>]? = nil,
         in sceneView: ARSCNView
     ) {
         let scnPosition = SCNVector3(position.x, position.y, position.z)
@@ -138,6 +139,22 @@ final class EffectManager: ObservableObject {
             let cubeNode = SCNNode(geometry: box)
             // Position is already OBB center — no offset needed
             rootNode.addChildNode(cubeNode)
+            node = rootNode
+        } else if type == .debugMesh {
+            guard let points = worldPoints, !points.isEmpty else { return }
+            let rootNode = SCNNode()
+            rootNode.position = SCNVector3Zero
+
+            let sphere = SCNSphere(radius: 0.005)
+            let material = SCNMaterial()
+            material.diffuse.contents = UIColor.yellow
+            sphere.materials = [material]
+
+            for point in points {
+                let dotNode = SCNNode(geometry: sphere)
+                dotNode.position = SCNVector3(point.x, point.y, point.z)
+                rootNode.addChildNode(dotNode)
+            }
             node = rootNode
         } else if let videoName = type.videoFileName {
             guard let info = videoCache[videoName],
