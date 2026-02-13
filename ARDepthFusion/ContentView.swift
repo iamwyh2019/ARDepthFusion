@@ -567,68 +567,135 @@ struct ContentView: View {
         return nil
     }
 
-    /// Compute a gravity-aligned OBB from a 3D point cloud using PCA on the XZ plane.
+    /// Compute a gravity-aligned OBB from a 3D point cloud using a minimum-area bounding rectangle on the XZ plane.
     /// Points should be pre-filtered by depth (10-90%) before calling.
-    /// Returns center, dimensions (width/height/depth in PCA-aligned frame), and yaw angle.
+    /// Returns center, dimensions (width/height/depth in OBB-aligned frame), and yaw angle.
     private func computePointCloudOBB(_ points: [SIMD3<Float>]) -> (center: SIMD3<Float>, dims: SIMD3<Float>, yaw: Float) {
-        // Step 1: PCA on XZ plane — single-pass Welford's algorithm for mean + covariance
-        let n = Float(points.count)
-        var meanX: Float = 0, meanZ: Float = 0
-        var cxx: Float = 0, czz: Float = 0, cxz: Float = 0
-        for (i, p) in points.enumerated() {
-            let k = Float(i + 1)
-            let dxOld = p.x - meanX
-            let dzOld = p.z - meanZ
-            meanX += dxOld / k
-            meanZ += dzOld / k
-            let dxNew = p.x - meanX
-            let dzNew = p.z - meanZ
-            cxx += dxOld * dxNew
-            czz += dzOld * dzNew
-            cxz += dxOld * dzNew
-        }
-        cxx /= n; czz /= n; cxz /= n
-
-        // Angle of principal axis (eigenvector with larger eigenvalue)
-        let yaw = atan2(2 * cxz, cxx - czz) / 2
-
-        // Step 2: Rotate all points into PCA-aligned frame, find min/max on each axis
-        let cosY = cos(-yaw)
-        let sinY = sin(-yaw)
-
-        var minRX: Float = .greatestFiniteMagnitude, maxRX: Float = -.greatestFiniteMagnitude
+        // Step 0: Y extents (gravity axis, independent of XZ rotation) + XZ mean as rotation pivot
         var minY: Float = .greatestFiniteMagnitude, maxY: Float = -.greatestFiniteMagnitude
-        var minRZ: Float = .greatestFiniteMagnitude, maxRZ: Float = -.greatestFiniteMagnitude
+        var meanX: Float = 0, meanZ: Float = 0
         for p in points {
-            let dx = p.x - meanX
-            let dz = p.z - meanZ
-            let rx = cosY * dx - sinY * dz
-            let rz = sinY * dx + cosY * dz
-            if rx < minRX { minRX = rx }; if rx > maxRX { maxRX = rx }
-            if p.y < minY { minY = p.y }; if p.y > maxY { maxY = p.y }
-            if rz < minRZ { minRZ = rz }; if rz > maxRZ { maxRZ = rz }
+            if p.y < minY { minY = p.y }
+            if p.y > maxY { maxY = p.y }
+            meanX += p.x
+            meanZ += p.z
+        }
+        let n = Float(points.count)
+        meanX /= n; meanZ /= n
+
+        // Step 1: Project to XZ, sort by X then Z (required by Andrew's monotone chain)
+        var xz = points.map { ($0.x, $0.z) }
+        xz.sort { $0.0 < $1.0 || ($0.0 == $1.0 && $0.1 < $1.1) }
+
+        // Step 2: Convex hull
+        let hull = convexHull(xz)
+
+        // Step 3: Degenerate fallback — all points coincident in XZ
+        if hull.count < 2 {
+            let center = SIMD3<Float>(meanX, (minY + maxY) / 2, meanZ)
+            return (center, SIMD3<Float>(0.02, max(maxY - minY, 0.02), 0.02), 0)
         }
 
-        // Dims with minimum floor of 0.02m per axis
-        let dimX = max(maxRX - minRX, 0.02)
+        // Step 4: Minimum-area bounding rectangle — test each hull edge orientation
+        var bestArea: Float = .greatestFiniteMagnitude
+        var bestYaw: Float = 0
+        var bestMinRX: Float = 0, bestMaxRX: Float = 0
+        var bestMinRZ: Float = 0, bestMaxRZ: Float = 0
+
+        let h = hull.count
+        for i in 0..<h {
+            let j = (i + 1) % h
+            let dx = hull[j].0 - hull[i].0
+            let dz = hull[j].1 - hull[i].1
+            let edgeLen = dx * dx + dz * dz
+            if edgeLen < 1e-12 { continue }
+
+            let theta = atan2(dz, dx)
+            let cosT = cos(-theta)
+            let sinT = sin(-theta)
+
+            // Rotate hull vertices only (not all points — hull is small)
+            var eMinRX: Float = .greatestFiniteMagnitude, eMaxRX: Float = -.greatestFiniteMagnitude
+            var eMinRZ: Float = .greatestFiniteMagnitude, eMaxRZ: Float = -.greatestFiniteMagnitude
+            for v in hull {
+                let cx = v.0 - meanX
+                let cz = v.1 - meanZ
+                let rx = cosT * cx - sinT * cz
+                let rz = sinT * cx + cosT * cz
+                if rx < eMinRX { eMinRX = rx }; if rx > eMaxRX { eMaxRX = rx }
+                if rz < eMinRZ { eMinRZ = rz }; if rz > eMaxRZ { eMaxRZ = rz }
+            }
+
+            let area = (eMaxRX - eMinRX) * (eMaxRZ - eMinRZ)
+            if area < bestArea {
+                bestArea = area
+                bestYaw = theta
+                bestMinRX = eMinRX; bestMaxRX = eMaxRX
+                bestMinRZ = eMinRZ; bestMaxRZ = eMaxRZ
+            }
+        }
+
+        // Step 5: Normalize so dims.x >= dims.z (longer axis along yaw direction)
+        var dimX = max(bestMaxRX - bestMinRX, 0.02)
+        var dimZ = max(bestMaxRZ - bestMinRZ, 0.02)
+        var midRX = (bestMinRX + bestMaxRX) / 2
+        var midRZ = (bestMinRZ + bestMaxRZ) / 2
+
+        if dimX < dimZ {
+            bestYaw += .pi / 2
+            swap(&dimX, &dimZ)
+            let oldMidRX = midRX
+            midRX = midRZ
+            midRZ = -oldMidRX
+        }
+
         let dimY = max(maxY - minY, 0.02)
-        let dimZ = max(maxRZ - minRZ, 0.02)
 
-        // Center in PCA-aligned frame, then rotate back to world
-        let midRX = (minRX + maxRX) / 2
-        let midY = (minY + maxY) / 2
-        let midRZ = (minRZ + maxRZ) / 2
-
-        // Inverse rotation (yaw, not -yaw)
-        let cosYInv = cos(yaw)
-        let sinYInv = sin(yaw)
+        // Step 6: Reconstruct world center — inverse-rotate rotated-frame midpoint
+        let cosYInv = cos(bestYaw)
+        let sinYInv = sin(bestYaw)
         let worldCenterX = cosYInv * midRX - sinYInv * midRZ + meanX
         let worldCenterZ = sinYInv * midRX + cosYInv * midRZ + meanZ
 
-        let center = SIMD3<Float>(worldCenterX, midY, worldCenterZ)
+        let center = SIMD3<Float>(worldCenterX, (minY + maxY) / 2, worldCenterZ)
         let dims = SIMD3<Float>(dimX, dimY, dimZ)
 
-        return (center, dims, yaw)
+        return (center, dims, bestYaw)
+    }
+
+    /// 2D cross product: (a - o) × (b - o). Positive = left turn, zero = collinear, negative = right turn.
+    private func cross2D(_ o: (Float, Float), _ a: (Float, Float), _ b: (Float, Float)) -> Float {
+        (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+    }
+
+    /// Andrew's monotone chain convex hull. Input must be sorted by X, then Y.
+    /// Returns CCW-ordered hull vertices (no duplicated closing vertex).
+    private func convexHull(_ sorted: [(Float, Float)]) -> [(Float, Float)] {
+        let n = sorted.count
+        if n < 2 { return sorted }
+
+        var hull = [(Float, Float)]()
+        hull.reserveCapacity(2 * n)
+
+        // Lower hull (left → right)
+        for p in sorted {
+            while hull.count >= 2 && cross2D(hull[hull.count - 2], hull[hull.count - 1], p) <= 0 {
+                hull.removeLast()
+            }
+            hull.append(p)
+        }
+
+        // Upper hull (right → left)
+        let lowerCount = hull.count + 1
+        for p in sorted.reversed() {
+            while hull.count >= lowerCount && cross2D(hull[hull.count - 2], hull[hull.count - 1], p) <= 0 {
+                hull.removeLast()
+            }
+            hull.append(p)
+        }
+
+        hull.removeLast() // Remove duplicated first point
+        return hull
     }
 
     /// Place all queued effects after the detection results screen is dismissed.

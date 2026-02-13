@@ -13,7 +13,7 @@ struct Object3DExtent {
 
     // Point-cloud gravity-aligned OBB (display only — debug cube + effect positioning)
     let obbCenter: SIMD3<Float>?   // World-space center
-    let obbDims: SIMD3<Float>?     // (width, height, depth) in PCA-aligned frame
+    let obbDims: SIMD3<Float>?     // (width, height, depth) in OBB-aligned frame
     let obbYaw: Float?             // Y-axis rotation of principal horizontal axis (radians)
 
     // Filtered 3D world points used for OBB computation (for debug mesh visualization)

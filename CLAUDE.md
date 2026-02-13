@@ -31,7 +31,7 @@ A real-time AR iOS app that detects objects and places pre-rendered video effect
 | Detection trigger | Manual (tap "Detect" button) |
 | Effect anchoring | Fixed in world coordinates (doesn't follow object) |
 | AR Framework | **SceneKit** with `ARSCNView` |
-| Minimum iOS | **iOS 16.0** |
+| Minimum iOS | **iOS 17.0** |
 | Effect management | Can delete individual effects |
 | Save feature | Not needed |
 | Object detection | **Integrated YOLO source** (yolo11l-seg with segmentation masks) |
@@ -50,7 +50,7 @@ A real-time AR iOS app that detects objects and places pre-rendered video effect
 - **Object Detection**: Integrated YOLO source (yolo11l-seg, with segmentation masks)
 - **Depth Estimation**: CoreML (Depth Anything V2 Small F16)
 - **Depth Source**: ARKit LiDAR (`ARFrame.sceneDepth`)
-- **Minimum iOS**: 16.0
+- **Minimum iOS**: 17.0
 - **Required Hardware**: iPhone/iPad with LiDAR (iPhone 12 Pro+, iPad Pro 2020+)
 
 ---
@@ -192,19 +192,21 @@ sceneView.session.run(config)
 
 ### 5c. Point-Cloud OBB (Oriented Bounding Box)
 
-The debug cube and 2D wireframe use a PCA-based OBB computed from mask-filtered LiDAR points:
+The debug cube and 2D wireframe use a **minimum-area bounding rectangle** OBB computed from mask-filtered LiDAR points:
 
-1. **Depth filtering**: Mask-filtered LiDAR depths are sorted; only points within the 10th–90th percentile depth range are unprojected to 3D. This removes background leakage (desk, wall) that would otherwise elongate the point cloud along the camera's viewing direction and confuse PCA.
+1. **Depth filtering**: Mask-filtered LiDAR depths are sorted; only points within the 10th–90th percentile depth range are unprojected to 3D. This removes background leakage (desk, wall) that would otherwise elongate the point cloud along the camera's viewing direction.
 
-2. **PCA on XZ plane**: Compute 2×2 covariance matrix of world X,Z coordinates, find principal axis angle via `θ = atan2(2·Cxz, Cxx - Czz) / 2`. This aligns the box with the object's actual horizontal shape (e.g., a laptop's long axis).
+2. **Convex hull on XZ plane**: Project filtered 3D points to (X, Z), sort, compute 2D convex hull via Andrew's monotone chain algorithm. The hull typically has 5–30 vertices.
 
-3. **Min/max extents**: Rotate all filtered points into the PCA-aligned frame, compute min/max on each axis (rotated-X, Y, rotated-Z) with a 0.02m floor per dimension.
+3. **Minimum-area rectangle search**: For each hull edge, rotate hull vertices to align that edge with the X axis, compute the axis-aligned bounding box area. The edge orientation producing the smallest area wins. This guarantees one box side is flush with a convex hull edge — critical for non-convex shapes like an open laptop (L-shape) where PCA would align with the diagonal.
 
-4. **Stored in `Object3DExtent`**: `obbCenter` (world), `obbDims` (width/height/depth in PCA frame), `obbYaw` (radians, angle from +X toward +Z), `obbPoints` (filtered 3D world points, used by debug mesh).
+4. **Yaw normalization**: If the rectangle's X extent < Z extent, yaw is rotated by +π/2 and dims swapped so `dims.x` is always the longer horizontal axis.
 
-5. **Fallback**: If <10 mask-filtered 3D points after depth filtering, OBB fields are nil → falls back to 6-point camera-yaw-aligned method. `obbPoints` is still stored even with <10 points (debug mesh can still visualize sparse clouds).
+5. **Stored in `Object3DExtent`**: `obbCenter` (world), `obbDims` (width/height/depth in OBB-aligned frame), `obbYaw` (radians, angle of longer edge from +X toward +Z), `obbPoints` (filtered 3D world points, used by debug mesh).
 
-**SceneKit yaw convention**: PCA yaw θ means the principal axis points at `(cos θ, 0, sin θ)` in world. `SCNNode.eulerAngles.y = -θ` aligns local X with this direction (SceneKit rotates local X toward −Z for positive angles).
+6. **Fallback**: If <10 mask-filtered 3D points after depth filtering, OBB fields are nil → falls back to 6-point camera-yaw-aligned method. `obbPoints` is still stored even with <10 points (debug mesh can still visualize sparse clouds).
+
+**SceneKit yaw convention**: OBB yaw θ means the longer edge points at `(cos θ, 0, sin θ)` in world. `SCNNode.eulerAngles.y = -θ` aligns local X with this direction (SceneKit rotates local X toward −Z for positive angles).
 
 **Consistency**: The wireframe (DetectionResultsView) and debug cube (EffectManager) use identical OBB data. The wireframe constructs axes directly from raw yaw; the debug cube uses negated yaw through SceneKit's euler convention. Both produce the same 8 world-space corners.
 
@@ -457,8 +459,9 @@ config.computeUnits = .cpuAndNeuralEngine
 config.computeUnits = .all
 ```
 
-### ⚠️ iOS 16 Minimum
-- Uses `ObservableObject` + `@StateObject` (not `@Observable` which requires iOS 17)
+### ⚠️ iOS 17 Minimum
+- `DepthAnythingV2SmallF16.mlpackage` requires iOS 17+ CoreML runtime (hard dependency)
+- Uses `ObservableObject` + `@StateObject` (not `@Observable`, but could migrate)
 - Uses `ARSCNView` (SceneKit, available since iOS 11)
 - AVFoundation video playback (available since iOS 4)
 
