@@ -4,6 +4,7 @@ import ARKit
 import CoreImage
 import CoreVideo
 import Accelerate
+import ImageIO
 
 private let sharedCIContext = CIContext(options: [.useSoftwareRenderer: false])
 
@@ -226,7 +227,11 @@ struct ContentView: View {
             from: CGRect(x: 0, y: 0, width: imgW, height: imgH)
         )
         if let cgCopy { capturedCIImage = CIImage(cgImage: cgCopy) }
-        let bgraData = frame.capturedImage.toBGRAData()
+        let bgraData = frame.capturedImage.toPortraitBGRAData()
+        // Debug: save the portrait image passed to YOLO
+        if let bgra = bgraData {
+            saveYOLOInputImage(bgraData: bgra.data, width: bgra.width, height: bgra.height)
+        }
         let lidarSnapshot = frame.sceneDepth.flatMap {
             LiDARSnapshot(depthMap: $0.depthMap, confidenceMap: $0.confidenceMap)
         }
@@ -253,6 +258,47 @@ struct ContentView: View {
             let objects = await yoloResult
             let depthArray = await depthEstResult
 
+            // Convert portrait YOLO detections back to landscape coordinates.
+            // Rotation was 90° CW (landscape→portrait), so inverse is 90° CCW.
+            // Pixel mapping: portrait(px, py) → landscape(py, pW - 1 - px)
+            // where pW = portrait image width = landscape image height.
+            let pW = imgH  // portrait width = 1440
+            let landscapeObjects: [DetectedObject] = objects.map { det in
+                let pb = det.boundingBox
+                let landscapeBbox = CGRect(
+                    x: pb.minY,
+                    y: CGFloat(pW - 1) - pb.maxX,
+                    width: pb.height,
+                    height: pb.width
+                )
+                let landscapeCentroid = CGPoint(
+                    x: det.centroid.y,
+                    y: CGFloat(pW - 1) - det.centroid.x
+                )
+                // Rotate proto mask 90° CCW: output[r][c] = input[c][N-1-r]
+                // Proto is always N×N (160×160 for 640×640 model).
+                var landscapeMask: [Float]? = nil
+                if let mask = det.mask, !mask.isEmpty {
+                    let N = det.maskWidth  // 160 (= maskHeight, always square)
+                    var rotated = [Float](repeating: 0, count: N * N)
+                    for r in 0..<N {
+                        for c in 0..<N {
+                            rotated[r * N + c] = mask[c * N + (N - 1 - r)]
+                        }
+                    }
+                    landscapeMask = rotated
+                }
+                return DetectedObject(
+                    className: det.className,
+                    confidence: det.confidence,
+                    boundingBox: landscapeBbox,
+                    centroid: landscapeCentroid,
+                    mask: landscapeMask,
+                    maskWidth: det.maskWidth,
+                    maskHeight: det.maskHeight
+                )
+            }
+
             var fusionResult: DepthFusionResult?
             if let depthArray, let lidarSnapshot {
                 fusionResult = DepthFusion.fuse(
@@ -269,7 +315,7 @@ struct ContentView: View {
             let intrinsics = capturedIntrinsics ?? simd_float3x3(1)
             let camTransform = capturedCameraTransform
             var extents: [Object3DExtent?] = []
-            for obj in objects {
+            for obj in landscapeObjects {
                 let extent = computeObject3DExtent(
                     detection: obj,
                     lidar: lidarSnapshot,
@@ -281,18 +327,18 @@ struct ContentView: View {
                 extents.append(extent)
             }
 
-            detections = objects
+            detections = landscapeObjects
             depthResult = fusionResult
             objectExtents = extents
             detectionElapsedMs = elapsed * 1000
             isDetecting = false
 
-            if objects.isEmpty {
+            if landscapeObjects.isEmpty {
                 statusText = "No objects detected"
             } else {
                 statusText = String(
                     format: "%d objects (%.0fms)",
-                    objects.count,
+                    landscapeObjects.count,
                     elapsed * 1000
                 )
                 showDetectionResults = true
@@ -302,7 +348,7 @@ struct ContentView: View {
             if let fusion = fusionResult {
                 print("Fusion alpha=\(fusion.alpha) beta=\(fusion.beta) pairs=\(fusion.validPairCount)")
             }
-            for (i, obj) in objects.enumerated() {
+            for (i, obj) in landscapeObjects.enumerated() {
                 let e = extents[i]
                 let src = e?.isLiDAR == true ? "LiDAR" : "fused"
                 print("  \(obj.className): depth=\(String(format: "%.2f", e?.medianDepth ?? -1))m (\(src))")
@@ -716,4 +762,44 @@ struct ContentView: View {
             statusText = "\(type.displayName) placed on \(detection.className)"
         }
     }
+}
+
+/// Save BGRA data as a PNG to Documents for debugging via the Files app.
+/// The image is Y-flipped to show what YOLO actually sees (after bytesToCVPixelBuffer flipY).
+private func saveYOLOInputImage(bgraData: Data, width: Int, height: Int) {
+    let bytesPerRow = width * 4
+    // Y-flip rows to show the image as YOLO actually sees it
+    var flipped = Data(count: bgraData.count)
+    bgraData.withUnsafeBytes { src in
+        flipped.withUnsafeMutableBytes { dst in
+            for y in 0..<height {
+                memcpy(dst.baseAddress! + y * bytesPerRow,
+                       src.baseAddress! + (height - 1 - y) * bytesPerRow,
+                       bytesPerRow)
+            }
+        }
+    }
+
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
+    let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue |
+                                            CGBitmapInfo.byteOrder32Little.rawValue)
+
+    guard let provider = CGDataProvider(data: flipped as CFData),
+          let cgImage = CGImage(width: width, height: height,
+                                bitsPerComponent: 8, bitsPerPixel: 32,
+                                bytesPerRow: bytesPerRow,
+                                space: colorSpace, bitmapInfo: bitmapInfo,
+                                provider: provider, decode: nil,
+                                shouldInterpolate: false, intent: .defaultIntent) else { return }
+
+    let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyyMMdd_HHmmss"
+    let filename = "yolo_input_\(formatter.string(from: Date())).png"
+    let url = docs.appendingPathComponent(filename)
+
+    guard let dest = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else { return }
+    CGImageDestinationAddImage(dest, cgImage, nil)
+    CGImageDestinationFinalize(dest)
+    print("Saved YOLO input: \(url.lastPathComponent) (\(width)×\(height))")
 }
